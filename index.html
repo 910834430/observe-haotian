@@ -128,6 +128,12 @@
     .sec-lbl{font-size:10px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:var(--muted);margin-bottom:14px;display:flex;align-items:center;gap:10px;}
     .sec-lbl::after{content:'';flex:1;height:1px;background:var(--border);}
 
+    /* ── Weekly Reports ── */
+    #weekly-report-section{margin-top:40px;}
+    .wr-item{padding:9px 0;border-bottom:1px solid var(--subtle);font-size:13px;color:#c5d1e0;line-height:1.55;display:flex;gap:8px;}
+    .wr-item:last-child{border-bottom:none;}
+    .wr-item::before{content:"›";color:var(--accent);font-weight:700;flex-shrink:0;}
+
     /* ── Responsive ── */
     @media(max-width:700px){
       .stats{grid-template-columns:1fr 1fr;}
@@ -194,6 +200,12 @@
 
     <div class="tabs" id="tabs"></div>
     <div id="day-view"></div>
+
+    <div id="weekly-report-section">
+      <div class="sec-lbl">Weekly Reports</div>
+      <div class="tabs" id="wr-tabs"></div>
+      <div id="wr-view"></div>
+    </div>
   </div>
 </div>
 
@@ -222,7 +234,7 @@ const fmtShort=s=>new Date(s+"T12:00:00").toLocaleDateString("en-US",{month:"sho
 function animCount(el,n){let c=0;const t=setInterval(()=>{c=Math.min(c+Math.ceil(n/25),n);el.textContent=c;if(c>=n)clearInterval(t);},40);}
 
 // ── Global state ──────────────────────────────────────────────────────────
-let DATA=null, activeDay=0, chartInst=null;
+let DATA=null, activeDay=0, chartInst=null, activeWeekly=0;
 
 // ── Fetch + render ─────────────────────────────────────────────────────────
 async function load(){
@@ -285,6 +297,7 @@ function render(){
   `).join("");
 
   renderDay();
+  renderWeeklyReports();
 }
 
 function switchDay(i){
@@ -347,6 +360,51 @@ function taskCard(title,dotCls,iconCls,icon,spin,items){
 
 function toggleTask(id){
   document.getElementById(id)?.classList.toggle("open");
+}
+
+// ── Weekly Reports ─────────────────────────────────────────────────────────
+function renderWeeklyReports(){
+  const wrs=DATA.weekly_reports;
+  if(!wrs||!wrs.length)return;
+  document.getElementById("wr-tabs").innerHTML=wrs.map((w,i)=>`
+    <button class="tab${i===activeWeekly?" active":""}" onclick="switchWeekly(${i})">${fmtShort(w.date)} week</button>
+  `).join("");
+  renderWeekly();
+}
+
+function switchWeekly(i){
+  activeWeekly=i;
+  document.querySelectorAll("#wr-tabs .tab").forEach((t,j)=>t.classList.toggle("active",j===i));
+  renderWeekly();
+}
+
+function renderWeekly(){
+  const w=DATA.weekly_reports[activeWeekly];
+  const list=items=>items.length
+    ?items.map(t=>`<div class="wr-item">${esc(t)}</div>`).join("")
+    :`<div class="wr-item" style="color:var(--muted)">Nothing noted</div>`;
+  document.getElementById("wr-view").innerHTML=`
+    <div class="grid2">
+      <div class="card">
+        <div class="card-head"><div class="dot dg"></div>This Week</div>
+        ${list(w.this_week||[])}
+      </div>
+      <div class="card">
+        <div class="card-head"><div class="dot db"></div>Next Week</div>
+        ${list(w.next_week||[])}
+      </div>
+    </div>
+    <div class="grid2">
+      <div class="card">
+        <div class="card-head"><div class="dot dy"></div>Blockers</div>
+        <div class="wr-item">${esc(w.blockers||"None.")}</div>
+      </div>
+      <div class="card">
+        <div class="card-head"><div class="dot db"></div>Notes</div>
+        ${list(w.notes||[])}
+      </div>
+    </div>
+  `;
 }
 
 function init(){load();setInterval(load,60000);}

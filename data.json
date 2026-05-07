@@ -57,5 +57,47 @@
         }
       ]
     }
+  ],
+  "weekly_reports": [
+    {
+      "date": "2026-05-03",
+      "this_week": [
+        "Drafted and finalized the Q2 data requirements package for Isuzu, covering three categories: HD Maps (§1), Driving Trajectory Data for SMART Model Adaptation (§2), and Multimodal Sensor Data for the Sensor Reconstruction Pipeline (§3).",
+        "Defined the full per-clip data schema for SMART training (agents.json, map.json, traffic_lights.json, manifest.json) and published the Inchor SMART Driving Data Contract v0.1 as a companion document.",
+        "Refined Section 2 based on team review: removed Waymo TFRecords dependency, replaced with explicit field schema; increased data volume minimums; added labeling and precision requirements; clarified traffic signal format (Time Phase Diagram preferred); updated map coverage buffer to 500 m–1 km.",
+        "Prepared client-facing email to Isuzu with all three attached specification documents.",
+        "Designed a 3-stage adversity integration plan for the NCRC co-sim and completed Stage 1 (TeraSim/SUMO only, no Autoware, no CNDE): created ncrc_adversity_stage1.yaml, aa_stage1.sumocfg, and ncrc_stage1_bvs.rou.xml with hand-crafted BV placement calibrated to the AV's actual post-warmup position. Key discovery: all NCRC edges are highway.secondary (17.88 m/s < 25 m/s threshold), so get_location() returns intersection — adversity location filter must be intersection, not highway. Verified: 52 cutin + 19 rearend adversity fires per 600 s run, consistent across 8+ runs via scripts/verify_ncrc_stage1.sh."
+      ],
+      "blockers": "None.",
+      "next_week": [
+        "Send the Q2 data requirements package to Isuzu and await feedback.",
+        "Stage 2: Re-enable CNDE on the NCRC co-sim (cnde.enabled: true) and verify adversity still fires with neural vehicle control active — check command resolution order so adversity is not silently suppressed by CNDE.",
+        "Stage 3: Integrate Autoware into the co-sim and validate full-stack adversity triggering during live AV navigation."
+      ],
+      "notes": [
+        "Isuzu is unlikely to have Waymo-compatible TFRecords; the data contract now specifies a decomposed JSON/CSV schema instead. WOMD field naming is still recommended as a reference to reduce conversion overhead.",
+        "Stage 1 verification: run bash scripts/verify_ncrc_stage1.sh from ~/Projects/Isuzu_cosim/TeraSim. To view in SUMO-GUI, set gui_flag: true in ncrc_adversity_stage1.yaml before running."
+      ]
+    },
+    {
+      "date": "2026-04-03",
+      "this_week": [
+        "Fixed OSM map and related traffic light issues.",
+        "Ran loop tests for current TeraSim with Autoware."
+      ],
+      "blockers": "None.",
+      "next_week": [
+        "Meet with Isuzu to update their local git and recent co-sim changes.",
+        "Create a web link for large files such as route file, weights, and OSM maps.",
+        "Fix permissive green pass behavior in Autoware (right of way module).",
+        "Investigate OSM layers.",
+        "Test co-sim speed and confirm bottleneck.",
+        "Stop sign functionality.",
+        "Keep running loop tests."
+      ],
+      "notes": [
+        "Do not rely on AI for its visual ability."
+      ]
+    }
   ]
 }
