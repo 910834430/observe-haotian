@@ -1,0 +1,26 @@
+{
+  "name": "Haotian",
+  "role": "Simulation Engineer",
+  "last_updated": "2026-05-07",
+  "days": [
+    {
+      "date": "2026-05-07",
+      "completed": [
+        "Created ncrc_adversity_all.yaml — all 7 vehicle adversity classes enabled with 8am rush-hour state file",
+        "Patched adversity fire logging to record adversity class name on every fire event (nade.py + adversity_manager.py)",
+        "Fixed DefenceLogger crash in LanechangeAbortAdversity — added missing store/get valid_distance_offset methods",
+        "Bypassed netconvert in construction zone pipeline — generate_enhanced_network() now uses shutil.copy2, TLS programs preserved (197=197, MD5 match)",
+        "Added 520toRapp Autoware lanelet2 map to cloud sync scripts and pushed to B2 storage"
+      ],
+      "in_progress": [
+        "Adversity coverage loop — stuck on Run #2 due to vehicle deadlock, needs time-to-teleport fix before restart"
+      ],
+      "todo": [
+        "Fix vehicle deadlock: reduce --time-to-teleport from 200 → 60 in ncrc_adversity_all.yaml, restart coverage loop",
+        "Complete adversity coverage test — confirm which of 7 adversity classes fire with rush-hour traffic",
+        "End-to-end test of static adversity config (stalled vehicle + construction zone) with new netconvert fix",
+        "Filter aa_with_types.rou.xml to NCRC-overlapping routes → aa_ncrc_only.rou.xml for denser local AV traffic"
+      ]
+    }
+  ]
+}
