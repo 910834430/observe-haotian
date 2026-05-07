@@ -4,7 +4,46 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Observe Haotian</title>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script>
+  // ── Password gate ──────────────────────────────────────────────────────
+  // SHA-256 hash of the password (never store plain text in source code)
+  // Current password hash — change by running:
+  //   echo -n "yourpassword" | sha256sum
+  const PASSWORD_HASH = "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3";
+
+  async function sha256(str) {
+    const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
+    return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+  }
+
+  async function checkPassword() {
+    const input = document.getElementById('pw-input').value;
+    const hash = await sha256(input);
+    if (hash === PASSWORD_HASH) {
+      sessionStorage.setItem('obs_auth', '1');
+      document.getElementById('gate').style.display = 'none';
+      document.getElementById('app').style.display = 'block';
+      startApp();
+    } else {
+      const err = document.getElementById('pw-error');
+      err.style.opacity = '1';
+      document.getElementById('pw-input').value = '';
+      document.getElementById('pw-input').focus();
+      setTimeout(() => err.style.opacity = '0', 2000);
+    }
+  }
+
+  window.addEventListener('DOMContentLoaded', () => {
+    if (sessionStorage.getItem('obs_auth') === '1') {
+      document.getElementById('gate').style.display = 'none';
+      document.getElementById('app').style.display = 'block';
+      startApp();
+    }
+    document.getElementById('pw-input').addEventListener('keydown', e => {
+      if (e.key === 'Enter') checkPassword();
+    });
+  });
+</script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet"/>
   <style>
     :root {
@@ -240,6 +279,49 @@
   </style>
 </head>
 <body>
+<!-- Password gate -->
+<div id="gate" style="
+  position:fixed;inset:0;z-index:9999;
+  background:#080c14;
+  display:flex;align-items:center;justify-content:center;
+">
+  <div style="
+    background:#0e1420;border:1px solid #1e2d45;border-radius:16px;
+    padding:48px 40px;width:100%;max-width:380px;text-align:center;
+  ">
+    <div style="
+      width:56px;height:56px;border-radius:14px;margin:0 auto 24px;
+      background:linear-gradient(135deg,#4f8ef7,#7c3aed);
+      display:flex;align-items:center;justify-content:center;
+      font-size:24px;font-weight:800;color:#fff;
+    ">H</div>
+    <div style="font-size:20px;font-weight:700;color:#fff;margin-bottom:6px;">Observe Haotian</div>
+    <div style="font-size:13px;color:#4a5568;margin-bottom:32px;">Enter password to continue</div>
+    <input id="pw-input" type="password" placeholder="Password" style="
+      width:100%;padding:12px 16px;border-radius:10px;
+      background:#141b2d;border:1px solid #1e2d45;
+      color:#e2e8f0;font-size:15px;outline:none;
+      font-family:inherit;margin-bottom:12px;
+      transition:border-color 0.2s;
+    " onfocus="this.style.borderColor='#4f8ef7'" onblur="this.style.borderColor='#1e2d45'"/>
+    <div id="pw-error" style="
+      font-size:12px;color:#ef4444;margin-bottom:12px;
+      opacity:0;transition:opacity 0.3s;height:16px;
+    ">Incorrect password</div>
+    <button onclick="checkPassword()" style="
+      width:100%;padding:12px;border-radius:10px;border:none;
+      background:linear-gradient(135deg,#4f8ef7,#7c3aed);
+      color:#fff;font-size:15px;font-weight:600;cursor:pointer;
+      font-family:inherit;transition:opacity 0.2s;
+    " onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
+      Enter
+    </button>
+  </div>
+</div>
+
+<!-- Main app (hidden until authenticated) -->
+<div id="app" style="display:none">
+
 <div class="blob blob-1"></div>
 <div class="blob blob-2"></div>
 
@@ -456,8 +538,12 @@ function taskCard(title, dotCls, items, iconType, iconChar) {
   </div>`;
 }
 
-load();
-setInterval(load, 60000);
+function startApp() {
+  load();
+  setInterval(load, 60000);
+}
 </script>
+
+</div><!-- end #app -->
 </body>
 </html>
