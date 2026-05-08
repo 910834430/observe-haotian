@@ -2,8 +2,65 @@
   "name": "Haotian",
   "role": "Simulation Engineer",
   "company": "Inchor Mobility",
-  "last_updated": "2026-05-07",
+  "last_updated": "2026-05-08",
   "days": [
+    {
+      "date": "2026-05-08",
+      "completed": [
+        {
+          "title": "DynamicTrafficManager — runtime BV spawning on NCRC",
+          "detail": "Built DynamicTrafficManager class (utils/dynamic_traffic_manager.py). Replaces static state_8am.xml.gz with runtime spawn/despawn of BVs around the AV on the 15 km NCRC circular route. Maintains 9 target BVs using suffix-route pattern. Integrated into NADEWithAV.on_step() and run_experiment_cnde.py via dynamic_traffic_cfg param. New config: ncrc_dynamic_adversity_all.yaml with aa_dynamic.sumocfg (no state file, begins at t=0)."
+        },
+        {
+          "title": "BV-BV collision mitigations (3 fixes)",
+          "detail": "(1) Same-batch spawn guard: added pending_positions dict + MAX_SPAWNS_PER_STEP=2 cap so vehicles spawned in the same 0.5s tick check each other for 25m clearance. (2) AdversityManager BV-BV exclusion: _has_nearby_bv_in_lane() skips adversity if another BV is within 15m in same lane, preventing cascade crashes from adversarial maneuvers. (3) pos_error watchdog in NDEController: aborts trajectory and restores IDM after 4 consecutive drift steps >1.5m, preventing libsumo segfault from invalid vehicle states."
+        },
+        {
+          "title": "continue_on_av_collision enabled + headless validation",
+          "detail": "Added continue_on_av_collision: true to ncrc_dynamic_adversity_all.yaml. Ran 3 headless tests. Best run: full 600s completed, 12 AV-BV collisions, avg 9.6 BVs nearby, 2431 adversity fires (1262 TFL, 793 lcabort, 158 leader, 93 lanechange, 73 follower). BV-BV collision rate reduced 5× vs. original."
+        },
+        {
+          "title": "Static adversity expansion — enhanced NCRC network",
+          "detail": "Created aa_fixed_enhanced.net.xml with emergency right-turn connections at junctions 62477148 and 62532012, enabling traffic rerouting when lane 0 is coned off. Two new scenario configs: ncrc_static_adversity.yaml (stalled car on 8974919181#0 + construction zone on 4411907471#0, t=0 no state file) and ncrc_construction_stalled_8am.yaml (same adversities on rush-hour state_8am base). ConnectionManager handles dynamic lane permission modification."
+        },
+        {
+          "title": "Per-adversity isolated test configs (4 new YAMLs)",
+          "detail": "Created ncrc_test_headon.yaml, ncrc_test_tfl.yaml, ncrc_test_lcabort.yaml, ncrc_test_merge.yaml. Each enables exactly one adversity class at probability=1.0 on the full NCRC circular route with 8am state file. MergeAdversity fixed to location='highway' (ramp edges classified as highway). HeadonAdversity isolated for later validation (requires opposing-direction traffic). ncrc_adversity_diverse.yaml: GUI demo with 5 fireable adversities at probability=0.15 for visual observation."
+        },
+        {
+          "title": "Adversity coverage summary — 5 of 7 confirmed fireable on NCRC",
+          "detail": "From headless 600s dynamic run: LanechangeAdversity ✅, LanechangeAbortAdversity ✅, LeaderAdversity ✅, FollowerAdversity ✅, TrafficRuleAdversity ✅. HeadonAdversity: requires opposing-traffic edge — unclear on NCRC circular route. MergeAdversity: requires ramp context — location fix applied, not yet tested."
+        }
+      ],
+      "in_progress": [
+        {
+          "title": "Static adversity configs — created but not yet run",
+          "detail": "ncrc_static_adversity.yaml and ncrc_construction_stalled_8am.yaml are ready. Need to run and confirm: (a) cones deploy correctly on enhanced network, (b) AV navigates past construction zone using emergency connection, (c) stalled vehicle blocks lane 0 and AV responds."
+        },
+        {
+          "title": "Per-adversity tests — not yet executed",
+          "detail": "ncrc_test_headon, ncrc_test_tfl, ncrc_test_lcabort, ncrc_test_merge all created but not run. Need to confirm each fires against AV in at least one 300s run."
+        }
+      ],
+      "todo": [
+        {
+          "title": "Run static adversity scenarios",
+          "detail": "python scripts/run_experiment_cnde.py --config configs/simulation/ncrc_static_adversity.yaml. Verify cones deploy, AV bypasses via emergency connection, no TLS errors."
+        },
+        {
+          "title": "Validate per-adversity test configs",
+          "detail": "Run each of ncrc_test_headon/tfl/lcabort/merge. Confirm fire events in adversity_diag.jsonl. HeadonAdversity may need a route that passes opposing-direction traffic."
+        },
+        {
+          "title": "Filter route file to NCRC-only edges",
+          "detail": "Filter aa_with_types.rou.xml to routes overlapping NCRC edges → produce aa_ncrc_only.rou.xml for denser relevant background traffic near AV. Currently static BVs include city-wide routes."
+        },
+        {
+          "title": "Investigate residual BV-BV collisions from static background traffic",
+          "detail": "11 of 18 BV-BV collisions in 600s run are between static BVs (v_2021-09-* IDs from aa_with_types.rou.xml). These fire adversarial commands on vehicles near each other. Consider raising _MIN_BV_GAP or limiting adversity eligibility to BVs within a specific distance of AV."
+        }
+      ]
+    },
     {
       "date": "2026-05-07",
       "completed": [
