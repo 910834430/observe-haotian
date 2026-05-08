@@ -5,6 +5,59 @@
   "last_updated": "2026-05-08",
   "days": [
     {
+      "date": "2026-05-07",
+      "completed": [
+        {
+          "title": "All-adversity config (ncrc_adversity_all.yaml)",
+          "detail": "Created with all 7 vehicle adversity classes at probability=1.0 using state_8am.xml.gz rush-hour base. VRU excluded — no pedestrian agents in environment."
+        },
+        {
+          "title": "Adversity fire logging — class-level tracking",
+          "detail": "Patched nade.py and adversity_manager.py to log adversity_class (e.g. LanechangeAdversity) on every fire event. Previously only logged predicted_collision_type which is shared across multiple classes."
+        },
+        {
+          "title": "Fixed DefenceLogger crash in LanechangeAbortAdversity",
+          "detail": "Added missing store_valid_distance_offset() and get_last_valid_distance_offset() methods to defence_logger.py. Was crashing with AttributeError on every run."
+        },
+        {
+          "title": "Construction zone netconvert bypass",
+          "detail": "Rewrote generate_enhanced_network() in connection_manager.py. Replaced 3-step netconvert pipeline with shutil.copy2(). Root cause: SUMO C++ validator rejects manually-inserted via-lanes in TLS junctions. Validated: exit code 0, TLS count 197=197, MD5 identical."
+        },
+        {
+          "title": "520toRapp Autoware map synced to cloud",
+          "detail": "Added pointcloud_map.pcd, 520toRapp_lanelet2.osm, and map_projector_info.yaml to autoware upload_maps.sh and sync_maps.sh. Pushed to B2 and committed to hht-dev branch."
+        },
+        {
+          "title": "Launched observe-haotian dashboard",
+          "detail": "Built and deployed this dashboard to GitHub Pages (910834430.github.io/observe-haotian) with password protection, live clock, charts, and daily task tracking."
+        }
+      ],
+      "in_progress": [
+        {
+          "title": "Adversity coverage loop — Run #2 stuck",
+          "detail": "Vehicle deadlock at edge 4414481701#0 (speed 0.26 m/s, reroute blocked). Process consumed 73 GB RAM before being killed. Fix: reduce --time-to-teleport from 200 → 60."
+        }
+      ],
+      "todo": [
+        {
+          "title": "Fix vehicle deadlock and restart adversity loop",
+          "detail": "Reduce --time-to-teleport from 200 to 60 in ncrc_adversity_all.yaml so stuck vehicles teleport out faster. Restart test_all_adversities.py loop."
+        },
+        {
+          "title": "Complete adversity coverage test",
+          "detail": "Run loop to completion. Confirm which of 7 adversity classes fire with rush-hour traffic. Expected hard ones: HeadonAdversity, TrafficRuleAdversity, MergeAdversity."
+        },
+        {
+          "title": "End-to-end static adversity test",
+          "detail": "Run ncrc_static_adversity.yaml with new construction zone fix. Confirm stalled vehicle + construction zone deploy with no TLS errors."
+        },
+        {
+          "title": "Filter route file to NCRC-only",
+          "detail": "Filter aa_with_types.rou.xml to ~15,621 routes (3.2%) overlapping NCRC edges → produce aa_ncrc_only.rou.xml for denser local AV traffic."
+        }
+      ]
+    },
+    {
       "date": "2026-05-08",
       "completed": [
         {
@@ -58,59 +111,6 @@
         {
           "title": "Investigate residual BV-BV collisions from static background traffic",
           "detail": "11 of 18 BV-BV collisions in 600s run are between static BVs (v_2021-09-* IDs from aa_with_types.rou.xml). These fire adversarial commands on vehicles near each other. Consider raising _MIN_BV_GAP or limiting adversity eligibility to BVs within a specific distance of AV."
-        }
-      ]
-    },
-    {
-      "date": "2026-05-07",
-      "completed": [
-        {
-          "title": "All-adversity config (ncrc_adversity_all.yaml)",
-          "detail": "Created with all 7 vehicle adversity classes at probability=1.0 using state_8am.xml.gz rush-hour base. VRU excluded — no pedestrian agents in environment."
-        },
-        {
-          "title": "Adversity fire logging — class-level tracking",
-          "detail": "Patched nade.py and adversity_manager.py to log adversity_class (e.g. LanechangeAdversity) on every fire event. Previously only logged predicted_collision_type which is shared across multiple classes."
-        },
-        {
-          "title": "Fixed DefenceLogger crash in LanechangeAbortAdversity",
-          "detail": "Added missing store_valid_distance_offset() and get_last_valid_distance_offset() methods to defence_logger.py. Was crashing with AttributeError on every run."
-        },
-        {
-          "title": "Construction zone netconvert bypass",
-          "detail": "Rewrote generate_enhanced_network() in connection_manager.py. Replaced 3-step netconvert pipeline with shutil.copy2(). Root cause: SUMO C++ validator rejects manually-inserted via-lanes in TLS junctions. Validated: exit code 0, TLS count 197=197, MD5 identical."
-        },
-        {
-          "title": "520toRapp Autoware map synced to cloud",
-          "detail": "Added pointcloud_map.pcd, 520toRapp_lanelet2.osm, and map_projector_info.yaml to autoware upload_maps.sh and sync_maps.sh. Pushed to B2 and committed to hht-dev branch."
-        },
-        {
-          "title": "Launched observe-haotian dashboard",
-          "detail": "Built and deployed this dashboard to GitHub Pages (910834430.github.io/observe-haotian) with password protection, live clock, charts, and daily task tracking."
-        }
-      ],
-      "in_progress": [
-        {
-          "title": "Adversity coverage loop — Run #2 stuck",
-          "detail": "Vehicle deadlock at edge 4414481701#0 (speed 0.26 m/s, reroute blocked). Process consumed 73 GB RAM before being killed. Fix: reduce --time-to-teleport from 200 → 60."
-        }
-      ],
-      "todo": [
-        {
-          "title": "Fix vehicle deadlock and restart adversity loop",
-          "detail": "Reduce --time-to-teleport from 200 to 60 in ncrc_adversity_all.yaml so stuck vehicles teleport out faster. Restart test_all_adversities.py loop."
-        },
-        {
-          "title": "Complete adversity coverage test",
-          "detail": "Run loop to completion. Confirm which of 7 adversity classes fire with rush-hour traffic. Expected hard ones: HeadonAdversity, TrafficRuleAdversity, MergeAdversity."
-        },
-        {
-          "title": "End-to-end static adversity test",
-          "detail": "Run ncrc_static_adversity.yaml with new construction zone fix. Confirm stalled vehicle + construction zone deploy with no TLS errors."
-        },
-        {
-          "title": "Filter route file to NCRC-only",
-          "detail": "Filter aa_with_types.rou.xml to ~15,621 routes (3.2%) overlapping NCRC edges → produce aa_ncrc_only.rou.xml for denser local AV traffic."
         }
       ]
     }

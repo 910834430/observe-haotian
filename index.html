@@ -251,8 +251,9 @@ function render(){
   document.getElementById("h-date").textContent="Last updated "+fmtDate(d.last_updated);
   document.getElementById("h-avatar").textContent=d.name[0];
 
-  // Stats from latest day
-  const today=d.days[d.days.length-1];
+  // Stats from today's entry (or most recent if today not present)
+  const _todayStr=new Date().toLocaleDateString("en-CA");
+  const today=d.days.find(x=>x.date===_todayStr)||d.days[d.days.length-1];
   const totalEver=d.days.reduce((s,x)=>s+(x.completed||[]).length,0);
   const statsData=[
     {lbl:"Done Today",val:(today.completed||[]).length,cls:"g",hint:"tasks completed"},
@@ -291,9 +292,10 @@ function render(){
   }).join("");
 
   // Tabs
+  const todayStr=new Date().toLocaleDateString("en-CA"); // YYYY-MM-DD in local time
   const tabsEl=document.getElementById("tabs");
   tabsEl.innerHTML=[...d.days].reverse().map((x,i)=>`
-    <button class="tab${i===activeDay?" active":""}" onclick="switchDay(${i})">${fmtShort(x.date)}${i===0?" · Today":""}</button>
+    <button class="tab${i===activeDay?" active":""}" onclick="switchDay(${i})">${fmtShort(x.date)}${x.date===todayStr?" · Today":""}</button>
   `).join("");
 
   renderDay();
