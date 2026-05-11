@@ -2,8 +2,65 @@
   "name": "Haotian",
   "role": "Simulation Engineer",
   "company": "Inchor Mobility",
-  "last_updated": "2026-05-08",
+  "last_updated": "2026-05-11",
   "days": [
+    {
+      "date": "2026-05-11",
+      "completed": [
+        {
+          "title": "All 7 adversity classes AV-targeted",
+          "detail": "Added AV-proximity guards to all 7 vehicle adversity trigger() methods. LeaderAdversity/FollowerAdversity require traci.vehicle.getLeader/getFollower to return AV within 0–80 m. LanechangeAdversity checks BV is in adjacent lane ahead of AV by 0–80 m. LanechangeAbortAdversity checks AV gap + same-edge. HeadonAdversity requires leader to be AV. MergeAdversity requires AV on ramp. TrafficRuleAdversity gates on AV within 80 m + path conflict. All log diagnostic events to /tmp/adversity_diag.jsonl."
+        },
+        {
+          "title": "Force-commit at probability=1.0 (bypass IS sampling)",
+          "detail": "In nade.py nade_control_commands(): when adversity.probability==1.0, adversarial command is force-committed, skipping the importance-sampling maneuver-challenge filter. Guarantees adversarial maneuver fires every eligible step during demos. BV highlighted with red circle via traci.vehicle.setColor."
+        },
+        {
+          "title": "Construction zone taper fix + lateral sublane model",
+          "detail": "Taper-In now sweeps right_edge→max_left across full lane width instead of a fixed small offset. Taper-Out stays parallel at max_left (no reverse sweep). Cone lateral margins raised 0.3→0.55 m so cones stay visually inside the lane boundary. Added lateral-resolution=0.8 to aa_dynamic_enhanced.sumocfg to enable SUMO's sublane model, which is required for off-center cone placement via moveToXY."
+        },
+        {
+          "title": "NCRC combined adversity config (ncrc_combined_adversity.yaml)",
+          "detail": "New unified config combining: DynamicTrafficManager (9 BVs near AV, runtime spawn/despawn), all 7 vehicle adversity classes at probability=1.0, construction zone on 8974919181#0 lane 0, and stalled car on 4411907471#0. Uses aa_fixed_enhanced.net.xml with emergency right-turn connections for construction zone rerouting. AV drives 120-edge Ann Arbor route through all adversity hotspots."
+        },
+        {
+          "title": "Adversity vehicle color system fix (7 distinct colors)",
+          "detail": "Root cause 1: adversity_class was never set in command.info, so adversarial_hook() always received None → defaulted to red. Fix: added adversity_class: self.__class__.__name__ to derive_command() in all 7 adversity files. Root cause 2: adversarial_hook() only called highlight() (temporary ring); added setColor() for persistent body color. Colors: LeaderAdversity=red, FollowerAdversity=orange, LanechangeAdversity=cyan, LanechangeAbortAdversity=magenta, TrafficRuleAdversity=blue, MergeAdversity=yellow, HeadonAdversity=purple."
+        },
+        {
+          "title": "AV route circular loop bug fix",
+          "detail": "Diagnosis: AV route ended with 44119073300, 44119073310 — the same 2 edges it starts with. During execute_av_warmup() (raw traci.simulationStep() loop, no TeraSim pipeline), SUMO detects a circular route and truncates to these 2 edges (178 m). AV completes route in 12 sim-seconds and is removed → warmup exits → simulation ends at t≈22s. Evidence: tripinfo showed rerouteNo=1, routeLength=178.98m, arrivalPos=114.2m. Fix: stripped trailing 44119073300 and 44119073310 from AV route — simulation now runs the full 120-edge path."
+        },
+        {
+          "title": "Construction zone CNDE handoff buffer + proactive rerouting",
+          "detail": "Widened CNDE exclusion buffer around construction zone from 20m to 150m, giving approaching vehicles enough room/time to execute a lane change before reaching the junction. Added proactive periodic rerouting (every 5 sim steps): rerouteTraveltime() for all vehicles whose planned route includes closed edges; changeLane() for vehicles already on the construction edge in the closed lane. AV explicitly excluded from rerouting."
+        },
+        {
+          "title": "Performance optimizations: TLS cache + deque popleft",
+          "detail": "nde.py: Added _tls_static_cache to cache per-TLS topology data (getControlledLinks and getCompleteRedYellowGreenDefinition) keyed by programID. Only re-fetches on program switch, eliminating repeated heavy TraCI calls every step for 197 TLS junctions. manager.py: Changed _agents_id_future_step from list to deque and used popleft() instead of pop(0), reducing agent ID consumption from O(n) to O(1)."
+        }
+      ],
+      "in_progress": [
+        {
+          "title": "ncrc_combined_adversity — pending re-run after route fix",
+          "detail": "Route circular-loop fix was just committed. Simulation has not been re-run yet to confirm AV now drives the full route for the full 600s. Previous run terminated at t=22s."
+        }
+      ],
+      "todo": [
+        {
+          "title": "Re-run ncrc_combined_adversity and verify full duration",
+          "detail": "python scripts/run_experiment_cnde.py --config configs/simulation/ncrc_combined_adversity.yaml. Confirm AV stays in simulation >60s and adversity fires appear with correct colors in SUMO-GUI."
+        },
+        {
+          "title": "MergeAdversity and HeadonAdversity — map limitation",
+          "detail": "MergeAdversity requires edge IDs containing 'Ramp'; Ann Arbor NCRC uses numeric IDs → will never fire. HeadonAdversity requires opposing-direction traffic; SUMO routes all vehicles same direction per edge. Both are unfireable on NCRC without a custom map or route file with opposing traffic."
+        },
+        {
+          "title": "validate_adversities.py — end-to-end headless validation",
+          "detail": "Run scripts/validate_adversities.py to confirm all 5 fireable adversity classes (Leader, Follower, Lanechange, LanechangeAbort, TrafficRule) fire at least once in a 300s headless run on the combined config."
+        }
+      ]
+    },
     {
       "date": "2026-05-07",
       "completed": [
