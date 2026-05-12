@@ -2,7 +2,7 @@
   "name": "Haotian",
   "role": "Simulation Engineer",
   "company": "Inchor Mobility",
-  "last_updated": "2026-05-11",
+  "last_updated": "2026-05-12",
   "days": [
     {
       "date": "2026-05-07",
@@ -168,6 +168,55 @@
         {
           "title": "validate_adversities.py — end-to-end headless validation",
           "detail": "Run scripts/validate_adversities.py to confirm all 5 fireable adversity classes (Leader, Follower, Lanechange, LanechangeAbort, TrafficRule) fire at least once in a 300s headless run on the combined config."
+        }
+      ]
+    },
+    {
+      "date": "2026-05-12",
+      "completed": [
+        {
+          "title": "Root cause: NDEController.all_checks_off silently broke TraCI lane changes",
+          "detail": "User reported AV still getting stuck in lane 0 behind the stalled car at 4411907471#0_0 pos 312, despite previous bypass logic firing 307 times per stall-edge traversal. Traced through SUMO LaneChangeMode bit semantics and found that NDEController.all_checks_off() unconditionally calls setLaneChangeMode(veh_id, 0) before processing LEFT/RIGHT commands — mode=0 disables both autonomous LC AND TraCI LC requests, so every changeLaneRelative call was silently dropped by SUMO. Fixed in execute_lane_change_command(): explicitly call setLaneChangeMode(veh_id, 256) right before changeLaneRelative so TraCI requests are respected. After the fix, AV enters stall edge in lane 1 at 14.5 m/s, traverses 96 of 113 ticks in lane 1, exits via 4126471851#0 lane 1, and continues route — instead of staying stuck at speed 0 for the entire run."
+        },
+        {
+          "title": "AV bypass for stalled car — cross-lane lookahead + adversity-only filter",
+          "detail": "Rewrote step-3 bypass logic in nade_with_av.py predict_av_control_command. Key changes: (1) PREEMPTIVE_DIST raised 120→320m so the AV detects the stalled car as soon as it enters the 325m edge; (2) always-on cross-lane lookahead — scan every lane on AV's current edge for static-adversity stalled objects, not just same-lane via getLeader; (3) ID filter _is_adv_obj() matches only known patterns (_stalled_object, _CONE_, _collision) so background traffic stopped at red lights does NOT trigger bypass; (4) when obstacle is in a non-AV lane (cross-lane), skip LEFT/RIGHT command and just keep MOBIL suppressed via lane-change mode 256, letting AV stay in the clear lane; (5) BYPASS_HOLD_DURATION reduced 40→15s to limit how long AV is held in the bypass lane after passing."
+        },
+        {
+          "title": "intersection_rearend YAML adversity — 60% → 80% all-5-fire on batch",
+          "detail": "Added intersection_rearend_accel (LeaderAdversity) and intersection_rearend_decel (FollowerAdversity) entries to ncrc_combined_adversity.yaml with location: 'intersection' and predicted_collision_type: 'intersection_rearend'. This complements the existing highway_rearend_* pair and lets the leader/follower adversities also fire on urban/TLS-controlled edges where the AV spends a lot of time on seeds that catch more red lights. The leader_fire counter is per-class (not per-location) so both highway and intersection triggers aggregate. Verified on a 5-run batch (seeds 233-237): seed 233 jumped from leader=0 NO to leader=104 with intersection rearend fires; seed 235 from leader=0 NO to leader=1672 YES. Combined success rate: 4/5 = 80% (vs 60% baseline)."
+        },
+        {
+          "title": "BV bypass attempt + rollback (lane-1 congestion caused AV collisions)",
+          "detail": "User asked why other BVs were still getting stuck behind the stalled car. First attempt: added DynamicTrafficManager._force_bypass_around_stalled() that scans each managed BV for an adversity-stalled-vehicle obstacle ahead and calls changeLane(bv_id, target, 5s) to force a lane change. Verified it worked at the per-BV level (BV-bypass triggers 141 / 90 / 5 times per run on stall edge), but caused regression: all lane-0 BVs migrated into lane 1 simultaneously and jammed AV's bypass lane. collision.xml showed AV colliding with dyn_bv_17 5 times consecutively from t=189 to t=233 on stall edge and the following edge 4411907541#0. Rolled back the BV bypass — letting BVs naturally stack behind the stalled car (IDM behavior) keeps lane 1 clear for AV without artificial intervention. Realistic and safer."
+        },
+        {
+          "title": "AV route verification — confirmed unchanged at runtime",
+          "detail": "User noticed SUMO GUI showed AV's future route turning right onto 87261030#0 at junction 62532012 (downstream of stalled car). Investigated whether AV's SUMO route had been silently mutated. Added [AV ROUTE OK] startup log and av_route_mutated diag event in on_step that compares traci.vehicle.getRoute(AV_ID) against config every 100 steps. Across all 5 batch runs: 0 mutations observed. The right-turn appearance in the GUI is a SUMO display artifact — at junction 62532012, lane 0 has two outgoing connections (lane 0 → 87261030#0 dir=r linkIdx=0 and lane 0 → 4126471851#0 dir=s linkIdx=1), and the GUI highlights the first-indexed one even though the vehicle.getRoute() consistently selects the straight option."
+        }
+      ],
+      "in_progress": [
+        {
+          "title": "20-run CNDE-enabled batch (seeds 100-119)",
+          "detail": "Running ncrc_combined_adversity_cnde.yaml (cnde.enabled: true) sequentially via run_adversity_loop_test.py with BATCH_CONFIG env override. Each run is 600s with all 5 vehicle adversities + 2 static adversities + DynamicTrafficManager + CNDE neural-network controller active on cache_radius (~100m) vehicles. Goal: verify CNDE remains stable for the full 600s with the latest AV bypass fix in place — no segfaults, no state drift, no junction deadlocks. Expected wall time ~1.5-2 hours."
+        },
+        {
+          "title": "NCRC full-route completion test (no time limit)",
+          "detail": "Pending — will run after the 20-run batch completes to avoid GPU/CPU contention. AV route has 129 edges; at the current ~7%/250s rate, full traversal needs ~30-60 minutes of simulation time. Will set run_time to a large bound (e.g. 7200s) and let the sim end naturally when AV reaches the last edge. Validates that the bypass fix doesn't introduce any pathological behavior on later route segments outside the stall area."
+        }
+      ],
+      "todo": [
+        {
+          "title": "Confirm CNDE + adversity coexist stably",
+          "detail": "After the 20-run batch, check (a) success rate (all-5-fire per run), (b) per-run wall time and CPU/GPU peak usage, (c) zero CNDE segfaults in segfault.log, (d) collision counts trending normal. If issues, isolate via cnde.enabled: false control run and iterate."
+        },
+        {
+          "title": "AV finishes 129-edge NCRC route end-to-end",
+          "detail": "Verify AV reaches the route terminus without permanent stuck/teleport events. If teleports occur, raise time-to-teleport setting or address upstream bottleneck. Confirms the full Ann Arbor loop is traversable end-to-end with all adversities and BVs active."
+        },
+        {
+          "title": "Prep for Autoware integration",
+          "detail": "Once the bypass fix, CNDE stability, and full-route traversal are all green, the codebase is in a known-good state for Autoware to take over AV control via the cosim interface. Document any AV control assumptions (warmup, LaneChangeMode, bypass triggering) that Autoware needs to know about."
         }
       ]
     }
