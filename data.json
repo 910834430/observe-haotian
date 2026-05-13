@@ -228,8 +228,8 @@
           "detail": "User flagged that BVs were stuck behind the stalled car in lane 0 with a right-turn-signal, instead of bypassing to lane 1. Three coordinated fixes made the natural lane-change happen: (a) added block_internal_lanes: [':62532012_1_0'] to stalled_car in ncrc_combined_adversity.yaml so SUMO's getBestLanes reports lane 0 as 'cannot continue along route', firing strategic LC well upstream; (b) reverted soft-block (setMaxSpeed=0.1) to hard-block (setDisallowed(['all'])) in stalled_object.py because the soft-block still showed allowsContinuation=True which let MOBIL keep-right re-migrate BVs back into the blocked lane; (c) boosted DTM-managed BVs' lcStrategic=10 (default 1) at spawn time so route-following overpowers MOBIL keep-right. Result: 12 BV bypass demonstrations across 5 runs (seeds 42-46), 2 stuck. The aggressive earlier variant (lcKeepRight=0, lcSpeedGain=0) crushed LanechangeAdversity fires (lc_fire dropped from ~66 to ~2 per run) so was reverted — lcStrategic=10 alone is the sweet spot."
         },
         {
-          "title": "Added lane 1 → 87261030 right-turn connection in net.xml (per user diagnosis)",
-          "detail": "User correctly observed that at junction 62532012 (downstream of stalled car), only lane 0 had a right-turn connection to 87261030#0 — so any background traffic wanting to right-turn was funneled into lane 0 and got stuck behind the stalled car too. Regenerated aa_fixed_enhanced.net.xml via SUMO netconvert with a connection patch: dumped plain XML (.nod / .edg / .con / .tll), added <connection from='4411907471#0' to='87261030#0' fromLane='1' toLane='0'/> to the .con.xml, rebuilt. New internal lane :62532012_2_0 carries lane 1 → 87261030 right turn; original :62532012_1_0 (lane 0 → 4126471851 straight) still exists for the block_internal_lanes target."
+          "title": "Added lane 1 → 87261030 right-turn connection via 方案一 script (NOT netconvert)",
+          "detail": "Initial attempt used netconvert to regenerate aa_fixed_enhanced.net.xml — user flagged this as forbidden (netconvert changes map geometry, TLS phase indices, junction shapes — 'absolutely not allowed'). Reverted via backup. Discovered the existing 方案一 script scripts/_archive/add_lane1_right_turns.py which uses xml.etree.ElementTree directly — clones the existing lane-0 right-turn internal via lane geometry, shares the same TLS linkIndex so phase strings DO NOT need modification, updates junction intLanes + request table in-place. NEW_TURNS config already had both junction 62532012 (stall car, was missing) and 62477148 (CZ, already done before). Re-ran on aa_fixed.net.xml → aa_fixed_enhanced.net.xml now has lane 1 → 87261030 (stall) AND lane 1 → 4411907420 (CZ) right-turn connections, both at the correct linkIndex without any TLS edits."
         },
         {
           "title": "DTM spawn filter: respect lane vClass (skip transit-only lanes)",
@@ -242,22 +242,42 @@
         {
           "title": "Conservative DTM force-LC fallback for the residual stuck cases",
           "detail": "Even with lcStrategic=10, a few BVs still slip into lane 0 and stop near the stalled car (LC didn't fire in time or target lane was momentarily packed). Re-enabled _force_bypass_around_stalled() in DTM step but tightened the conditions vs the earlier mass-LC attempt that caused AV-vs-BV collisions: only fires when BV is BOTH within 80m of an adversity-ID obstacle AND below 3 m/s — i.e. genuinely already stuck. Target lane picked with passenger-vClass check (no LC into transit-only lane 2). The lane-1 jam scenario does not recur because the trigger is per-BV-as-they-stall, not a synchronous mass LC upstream."
+        },
+        {
+          "title": "100% all-5-fire on 5-run batch after proper net.xml regeneration",
+          "detail": "Re-ran 5-run batch seeds 42-46 with the 方案一-regenerated net.xml + DTM lcStrategic=10 boost (defaults preserve LanechangeAdversity dynamics) + conservative force_bypass fallback (<80m, <3 m/s). Results: ALL FIVE seeds fire all 5 adversity classes (5/5 = 100%, vs earlier 60% baseline). 13 BV bypass demonstrations across batch, 0 BVs stuck behind stalled car. Force-bypass fallback triggered only 57 times total (vs 342 with earlier aggressive-LC variant) — most BVs LC naturally via lcStrategic boost + the new lane-1 right-turn relief valve for background traffic. The proper net.xml fix was the missing piece: with lane 1 having BOTH straight and right options, background traffic doesn't bottleneck lane 0, and adversity coverage jumps to 100%."
+        },
+        {
+          "title": "Inline collision/adversity report at end of run_experiment_cnde.py",
+          "detail": "Added live collision counter hook in NADEWithAV.on_step: calls traci.simulation.getCollisions() every step, dedupes vehicle pairs within 2s window (SUMO emits continuous re-collision pulses while two vehicles overlap), writes collision_tick events to /tmp/adversity_diag.jsonl with av_involved tag. Added _print_run_summary() that runs at end of main(): reads diag jsonl + SUMO native collision.xml, prints per-class adversity fire counts, total / AV-involved / BV-only collision counts, and unique collision pair list. No separate monitor script needed — everything inline. Smoke-tested: 60s headless run captured 5 collisions correctly classified."
+        },
+        {
+          "title": "Verified AV route deviation under CNDE: non-deterministic",
+          "detail": "User reported AV's actual route changes when cnde.enabled flips false→true. Verified with detailed instrumentation in headless run: one run AV deviated at t=313 from config-route edge 4411907541#0 to off-route edge 4411907350, then wandered through 4411907290, 4411907240, 87291760 (all NOT in 129-edge config route). traci.vehicle.getRoute(AV_ID) however remained UNCHANGED — so it's NOT a setRoute mutation, AV's physical position diverges from its assigned route. Restarted with finer instrumentation (every 5 steps + explicit av_off_route event) — next run AV stayed on route through all 53 edges visited up to t=1331s. CNDE NN inference is stochastic so the deviation is a transient triggered by specific BV configurations — not deterministic."
         }
       ],
       "in_progress": [
         {
-          "title": "Adversity fire rate variance (3/5 all-5-fire on seeds 42-46)",
-          "detail": "Two seeds (42 and 46) miss lcabort_actual_fire=0 — LanechangeAbortAdversity requires highly specific geometry (BV mid-LC, AV in adjacent target lane, sideswipe distance <30m). The intersection_rearend YAML addition still helps leader/follower coverage but doesn't unblock lcabort. Likely seed-dependent rather than a systematic regression."
+          "title": "Long-running CNDE-on full-route headless verification",
+          "detail": "Background headless run with CNDE enabled, run_time=7200s, attempting to complete AV's full 129-edge NCRC route. Currently at edge [53] / 128 (41%), t=1331s, all 5 adversity classes firing (leader=3404, follower=1198, lc=89, lcabrt=1, tfl=220), 27 collisions logged (7 AV-involved, 20 BV-only). Expected ~1.5-2 hours more wall time to reach route terminus. DTM still active throughout — confirmed dyn_bv_* vehicles appearing in adversity check events."
+        },
+        {
+          "title": "Investigating non-deterministic AV route deviation under CNDE",
+          "detail": "Need to find why CNDE-on causes occasional AV off-route excursions while getRoute() reports unchanged. moveTo_diag.log shows no AV-targeted moveToXY calls. Suspect SUMO-internal path adjustment when AV's current lane lies on a blocked-connection chain (block_internal_lanes for stalled car). Will need deeper trace with av_off_route hook + log AV's getRouteIndex per tick to pinpoint."
         }
       ],
       "todo": [
         {
-          "title": "Test full NCRC route completion (no time limit)",
-          "detail": "AV's route has 129 edges; need to verify AV reaches the terminus without permanent teleport/stuck. At ~7%/250s rate, expect ~30-60 minutes of sim time. Important pre-Autoware milestone."
+          "title": "Verify full NCRC route end-to-end completion",
+          "detail": "Currently in progress. Confirm AV reaches route terminus (edge 128) without permanent stuck/teleport. Capture final adversity fire + collision totals for the report. Important pre-Autoware milestone."
         },
         {
-          "title": "Push Autoware integration once bypass + CNDE + full-route all green",
-          "detail": "Codebase is in a known-good state for Autoware to take over AV control via the cosim interface. Document AV control assumptions (warmup, LaneChangeMode=256, bypass triggering, lcStrategic boost) that Autoware needs to be aware of."
+          "title": "Root-cause CNDE-vs-AV-route interaction",
+          "detail": "Determine whether occasional CNDE-induced AV deviation is from (a) SUMO internal auto-rerouting on blocked-lane edges, (b) leakage of CNDE trajectory commands to AV despite filter at base_complete.py:191-193, or (c) some other mechanism. Fix root cause before Autoware integration."
+        },
+        {
+          "title": "Autoware integration prep",
+          "detail": "Once CNDE + full-route + bypass are all stable, formalize the code state for Autoware control via cosim. Document AV control assumptions: warmup_control, LaneChangeMode=256 during bypass, block_internal_lanes for stalled car, lcStrategic=10 for DTM BVs, lane-1 right-turn additions in net.xml."
         }
       ]
     }
