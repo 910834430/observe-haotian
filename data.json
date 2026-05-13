@@ -2,7 +2,7 @@
   "name": "Haotian",
   "role": "Simulation Engineer",
   "company": "Inchor Mobility",
-  "last_updated": "2026-05-12",
+  "last_updated": "2026-05-13",
   "days": [
     {
       "date": "2026-05-07",
@@ -217,6 +217,47 @@
         {
           "title": "Prep for Autoware integration",
           "detail": "Once the bypass fix, CNDE stability, and full-route traversal are all green, the codebase is in a known-good state for Autoware to take over AV control via the cosim interface. Document any AV control assumptions (warmup, LaneChangeMode, bypass triggering) that Autoware needs to know about."
+        }
+      ]
+    },
+    {
+      "date": "2026-05-13",
+      "completed": [
+        {
+          "title": "BV lane 0 → lane 1 bypass feature working (~12 demos / 5 runs)",
+          "detail": "User flagged that BVs were stuck behind the stalled car in lane 0 with a right-turn-signal, instead of bypassing to lane 1. Three coordinated fixes made the natural lane-change happen: (a) added block_internal_lanes: [':62532012_1_0'] to stalled_car in ncrc_combined_adversity.yaml so SUMO's getBestLanes reports lane 0 as 'cannot continue along route', firing strategic LC well upstream; (b) reverted soft-block (setMaxSpeed=0.1) to hard-block (setDisallowed(['all'])) in stalled_object.py because the soft-block still showed allowsContinuation=True which let MOBIL keep-right re-migrate BVs back into the blocked lane; (c) boosted DTM-managed BVs' lcStrategic=10 (default 1) at spawn time so route-following overpowers MOBIL keep-right. Result: 12 BV bypass demonstrations across 5 runs (seeds 42-46), 2 stuck. The aggressive earlier variant (lcKeepRight=0, lcSpeedGain=0) crushed LanechangeAdversity fires (lc_fire dropped from ~66 to ~2 per run) so was reverted — lcStrategic=10 alone is the sweet spot."
+        },
+        {
+          "title": "Added lane 1 → 87261030 right-turn connection in net.xml (per user diagnosis)",
+          "detail": "User correctly observed that at junction 62532012 (downstream of stalled car), only lane 0 had a right-turn connection to 87261030#0 — so any background traffic wanting to right-turn was funneled into lane 0 and got stuck behind the stalled car too. Regenerated aa_fixed_enhanced.net.xml via SUMO netconvert with a connection patch: dumped plain XML (.nod / .edg / .con / .tll), added <connection from='4411907471#0' to='87261030#0' fromLane='1' toLane='0'/> to the .con.xml, rebuilt. New internal lane :62532012_2_0 carries lane 1 → 87261030 right turn; original :62532012_1_0 (lane 0 → 4126471851 straight) still exists for the block_internal_lanes target."
+        },
+        {
+          "title": "DTM spawn filter: respect lane vClass (skip transit-only lanes)",
+          "detail": "Discovered that lane 2 of 4411907471#0 has disallow='passenger motorcycle moped' AND zero outgoing connections — it's a bus/HOV/transit lane. DTM was randomly picking lane 2 for passenger BVs, which SUMO then immediately tried to LC out of, causing the BVs to migrate through lane 1 into lane 0 (via MOBIL keep-right) and stack behind the stalled car. Added a getDisallowed check in DynamicTrafficManager._is_position_clear that rejects any lane disallowing 'passenger'. Now DTM only spawns into lanes 0 and 1 on this edge."
+        },
+        {
+          "title": "Found and fixed the silent SUMO LaneChangeMode=0 trap in NDEController",
+          "detail": "AV bypass was firing 307 times per stall-edge traversal but AV never actually changed lane. Traced to NDEController.all_checks_off() which unconditionally calls setLaneChangeMode(veh_id, 0) before processing any LEFT/RIGHT command — and mode=0 in SUMO means 'no autonomous LC AND ignore TraCI requests'. Every changeLaneRelative call was silently dropped. Fix in execute_lane_change_command: explicitly setLaneChangeMode(veh_id, 256) right before the changeLaneRelative so TraCI requests are respected. After this fix AV enters stall edge in lane 1 at 14.5 m/s, completes 96 of 113 ticks in lane 1, and exits via 4126471851#0."
+        },
+        {
+          "title": "Conservative DTM force-LC fallback for the residual stuck cases",
+          "detail": "Even with lcStrategic=10, a few BVs still slip into lane 0 and stop near the stalled car (LC didn't fire in time or target lane was momentarily packed). Re-enabled _force_bypass_around_stalled() in DTM step but tightened the conditions vs the earlier mass-LC attempt that caused AV-vs-BV collisions: only fires when BV is BOTH within 80m of an adversity-ID obstacle AND below 3 m/s — i.e. genuinely already stuck. Target lane picked with passenger-vClass check (no LC into transit-only lane 2). The lane-1 jam scenario does not recur because the trigger is per-BV-as-they-stall, not a synchronous mass LC upstream."
+        }
+      ],
+      "in_progress": [
+        {
+          "title": "Adversity fire rate variance (3/5 all-5-fire on seeds 42-46)",
+          "detail": "Two seeds (42 and 46) miss lcabort_actual_fire=0 — LanechangeAbortAdversity requires highly specific geometry (BV mid-LC, AV in adjacent target lane, sideswipe distance <30m). The intersection_rearend YAML addition still helps leader/follower coverage but doesn't unblock lcabort. Likely seed-dependent rather than a systematic regression."
+        }
+      ],
+      "todo": [
+        {
+          "title": "Test full NCRC route completion (no time limit)",
+          "detail": "AV's route has 129 edges; need to verify AV reaches the terminus without permanent teleport/stuck. At ~7%/250s rate, expect ~30-60 minutes of sim time. Important pre-Autoware milestone."
+        },
+        {
+          "title": "Push Autoware integration once bypass + CNDE + full-route all green",
+          "detail": "Codebase is in a known-good state for Autoware to take over AV control via the cosim interface. Document AV control assumptions (warmup, LaneChangeMode=256, bypass triggering, lcStrategic boost) that Autoware needs to be aware of."
         }
       ]
     }
