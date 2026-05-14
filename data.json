@@ -2,7 +2,7 @@
   "name": "Haotian",
   "role": "Simulation Engineer",
   "company": "Inchor Mobility",
-  "last_updated": "2026-05-13",
+  "last_updated": "2026-05-14",
   "days": [
     {
       "date": "2026-05-07",
@@ -278,6 +278,59 @@
         {
           "title": "Autoware integration prep",
           "detail": "Once CNDE + full-route + bypass are all stable, formalize the code state for Autoware control via cosim. Document AV control assumptions: warmup_control, LaneChangeMode=256 during bypass, block_internal_lanes for stalled car, lcStrategic=10 for DTM BVs, lane-1 right-turn additions in net.xml."
+        }
+      ]
+    },
+    {
+      "date": "2026-05-14",
+      "completed": [
+        {
+          "title": "Investigated why Autoware avoidance never triggered at the construction zone",
+          "detail": "Traced behavior_planning logs: avoidance module IS running (parent_id ERRORs and path_shifter 'Acc limit too small' warnings fire many times), but the candidate path is never committed — /planning/path_candidate/avoidance has 0 publishers and the RTC cooperate_status never updates. Real root cause discovered by user observation: a single stalled vehicle (4.5×1.8m UNKNOWN BBox at 4411907471#0_0) DOES trigger reroute reliably, but the construction zone (which used to publish N tiny 0.5×0.5m cones plus a hidden 42×3.2m 'envelope' vehicle) fails. The 42m × 3.2m envelope in a 3.5m lane leaves no room for hard_lateral_distance_limit → avoidance bails as 'not avoidable'."
+        },
+        {
+          "title": "Plugin/code dead-ends explored and reverted to clean state",
+          "detail": "Iterated multiple plugin-side fixes that all turned out wrong before settling: (a) bundled all WZ_* cones into one OBB POLYGON PredictedObject via PCA — added then removed; (b) overrode envelope dims to 4.5×1.8 (stalled-style) but kept original SUMO position, which left sumo_to_center computing the geometric center 19m further from AV — pushed it OUTSIDE forward_distance=150 and made avoidance worse, not better; (c) overrode only width to 1.8 keeping length 42 — never tested fully. Final clean state: Autoware plugin's construction_objects loop runs exactly as upstream, NO polygon/OBB/dim override code. Stalled vehicles are the only obstacle type the planner sees."
+        },
+        {
+          "title": "Removed invisible SUMO envelope vehicle from UrbanConstructionZone",
+          "detail": "urban_construction_simple.py used to spawn an alpha=0 SUMO vehicle CONSTRUCTION_BV_envelope_<edge>_l<lane> with length=full_zone_length × width=lane_width to act as a single 'stalled-vehicle-like' obstacle for Autoware avoidance. Deleted that block — Autoware now only sees the real stalled vehicles, and the cosim path is back to publishing individual cones (which the plugin still filters out via WZ_* skip, so they stay decorative only)."
+        },
+        {
+          "title": "Fixed shared r_stalled_object route bug",
+          "detail": "StalledObjectAdversity hardcoded `r_stalled_object` as the SUMO routeID and silently swallowed the 'route exists' exception. With multiple StalledObjectAdversity instances on different edges, instance 2's edge was never added to the route, then moveTo failed with 'Lane is not on the route of vehicle'. Fixed in stalled_object.py: route id is now per-lane, `r_stalled_object_{safe_lane}`, both at spawn and at teleport-recovery."
+        },
+        {
+          "title": "Made the run never terminate early — sim now drives the full NCRC loop",
+          "detail": "tripinfo.xml across recent runs all showed AV ending mid-route at 8974919201#0_0 pos=114.75 with arrivalSpeed=0, waitingTime ~200s, vaporized='teleport' — i.e. AV stops in front of construction zone (Autoware couldn't plan around it), SUMO time-to-teleport hits, teleport fails for the cosim-controlled AV, SUMO vaporizes it, then nade_with_av._terminate_check returned False on 'AV_left'. Two fixes: (a) cosim plugin now detects AV missing from traci.vehicle.getIDList() in the replay path and re-adds it (route id 'av_route', vType NDE_HIGHWAY) before the replay moveToXY; (b) nade_with_av's AV_left branch and AV-vs-VRU collision branch now respect continue_on_av_collision instead of unconditionally returning False, matching what was already done for AV-vs-vehicle collisions."
+        },
+        {
+          "title": "Final adversity layout on the NCRC route",
+          "detail": "Pruned config to 3 stalled vehicles total: stalled_car (car_normal, 4411907471#0_0 pos 312 — the known-working reroute trigger) + stalled_car_4126464941 (semi_truck 16.5m, pos 28) + stalled_car_4126464941_b (truck_delivery 8.5m, pos 11) on the same lane 4126464941#0_0. Two long trucks placed back-to-back with 0.5m gap, occupying lane positions [2.5, 11] and [11.5, 28], leaving 2.5m buffer at each lane end to keep SUMO from advancing them. Net.xml lane-1 right-turn additions at junctions 62532012 + 62477148 retained from earlier work."
+        },
+        {
+          "title": "Added other_settings.color RGBA override to StalledObjectAdversity",
+          "detail": "Read color list [R,G,B,A] (0–255) from the yaml entry and call traci.vehicle.setColor at spawn. Lets us hide a stalled vehicle from SUMO GUI by setting alpha=0 while leaving traci/physics/cosim sync untouched, or recolor it for debugging (currently semi_truck=yellow, truck_delivery=magenta to visually confirm position vs the Autoware BBox)."
+        }
+      ],
+      "in_progress": [
+        {
+          "title": "Stalled trucks still visually drifting in SUMO GUI",
+          "detail": "Even after (a) moving lane_position from 30→28 to leave a tail buffer and (b) replacing the >0.1m drift threshold with a force-moveTo-every-step in stalled_object.update(), the user reports the yellow semi_truck still appears to move. Likely cause: static_adversity.update() is called from nade.preparation() — BEFORE traci.simulationStep() that step. So order each step is `pin → SUMO step → next pin`, and SUMO's sublane lateral resolution slides the vehicle between two pins. Next: relocate the pin call to AFTER traci.simulationStep() (matching what sumo_warmup already does)."
+        }
+      ],
+      "todo": [
+        {
+          "title": "Move stalled-vehicle pinning to post-step",
+          "detail": "Add a post-step pin hook (after traci.simulationStep()) so the truck snaps back to its anchor before the next frame is rendered, eliminating the inter-step visual drift. Keep the existing pre-step pin too for safety."
+        },
+        {
+          "title": "Re-verify Autoware avoidance reroutes around the two trucks on 4126464941#0_0",
+          "detail": "User confirmed earlier that this two-truck setup did trigger reroute. After today's revert (plugin no longer overrides dims, no polygon, no envelope), need to actually observe in RViz that the BBoxes appear at the correct world coords and that /planning/path_candidate/avoidance starts publishing as AV approaches."
+        },
+        {
+          "title": "Once positions confirmed, hide trucks and add decorative-only cones back",
+          "detail": "yaml: set color back to [0,0,0,0] for both trucks; re-add decorative_zone_4126464941 entry (UrbanConstructionZone with connection_management.enabled=false) so SUMO/dash render visible cones while Autoware perception (with WZ_* skip) still only sees the two trucks driving avoidance behavior."
         }
       ]
     }
