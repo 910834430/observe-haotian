@@ -2,7 +2,7 @@
   "name": "Haotian",
   "role": "Simulation Engineer",
   "company": "Inchor Mobility",
-  "last_updated": "2026-05-14",
+  "last_updated": "2026-05-15",
   "days": [
     {
       "date": "2026-05-07",
@@ -331,6 +331,55 @@
         {
           "title": "Once positions confirmed, hide trucks and add decorative-only cones back",
           "detail": "yaml: set color back to [0,0,0,0] for both trucks; re-add decorative_zone_4126464941 entry (UrbanConstructionZone with connection_management.enabled=false) so SUMO/dash render visible cones while Autoware perception (with WZ_* skip) still only sees the two trucks driving avoidance behavior."
+        }
+      ]
+    },
+    {
+      "date": "2026-05-15",
+      "completed": [
+        {
+          "title": "Accident-rate summary auto-generated per run (JSON + TXT)",
+          "detail": "Every TeraSim sim — standalone, CNDE-on, or Autoware co-sim — now writes accident_summary.json (machine-readable) and accident_summary.txt (cat-friendly) into the run's own output directory at exit, regardless of whether the sim finished cleanly or crashed. The summary lists every adversity class (lc / lcabort / lcabort_actual / leader / follower / headon / merge / tfl) with its fire count, total collisions split by AV-involved vs BV-only, the AV's final sim_t and edge, and cross-checks against SUMO's native collision.xml. The fire-event catalog was expanded from 5 to 8 classes (previously missing headon / merge / lcabort_fire). Implementation lives in scripts/run_experiment_cnde.py in setup_cnde_environment() and _print_run_summary(); the call site at the end of main() and inside main_autoware() are both wrapped in try/except so an exception in summary generation never masks a sim-side failure. Commit 54e537d on cnde-yilin."
+        },
+        {
+          "title": "ADVERSITY_DIAG_FILE default moved from /tmp into the run's output dir",
+          "detail": "Previously, the fire/collision log was written to /tmp/adversity_diag.jsonl by default, which (a) leaked across runs in the same process tree, (b) was easy to miss when archiving a run's data, and (c) got nuked on reboot. setup_cnde_environment() now defaults ADVERSITY_DIAG_FILE to <output_dir>/adversity_diag.jsonl. Explicit env-var overrides (e.g. the parallel runner uses isolated /tmp paths per run_idx) are still honored — the default is only applied when nothing is set. Confirmed in smoke test: 60s NDE-NADE run dropped a 7244-event diag log + both summary files into output/ncrc_combined_adversity/raw_data/smoke_test_accident_summary/ in ~70s wall time."
+        },
+        {
+          "title": "Standalone post-hoc summary helper (scripts/compute_accident_summary.py)",
+          "detail": "Some sims hard-crash before the in-process summary writer can fire (e.g. yesterday's libsumo deadlock on 2227845261#0). For those cases we now have a standalone script that regenerates accident_summary.{json,txt} from any existing output directory, auto-detecting the diag file location (output dir → ADVERSITY_DIAG_FILE env → /tmp fallback). Validated by retroactively regenerating summaries for fastcheck_run01_seed700 and fastcheck_run02_seed701 — both died yesterday but their /tmp diag logs were still on disk, so the helper reconstructed full summaries (5258 fires + 62 collisions for run01, 1426 fires + 9 collisions for run02)."
+        },
+        {
+          "title": "main_autoware() now mirrors main() for summary generation",
+          "detail": "Previously the Autoware path (run_experiment_cnde.py --autoware) called run_simulation_autoware() directly and produced no accident summary — long closed-loop runs ended with diag data scattered around /tmp and no aggregate report. main_autoware() now calls setup_cnde_environment() before launch and wraps run_simulation_autoware() in try/finally with _print_run_summary() in the finally block, so a Ctrl+C, service crash, or normal Autoware shutdown all produce the same summary files in the run's output dir."
+        },
+        {
+          "title": "README — Standalone / Add CNDE / Add Autoware consolidation + accident rate section, pushed",
+          "detail": "Committed and pushed yesterday's README rewrite (a90bbc5, 2fb2423, 12fc662): single canonical scenario ncrc_combined_adversity.yaml as the entry point; three additive run modes (Standalone, Add CNDE, Add Autoware); explicit terminal ordering for the Autoware launch (TeraSim service → SUMO experiment → Autoware planning_simulator, not the other way around); new SUMO GUI color scheme section enumerating every setColor / highlight; new Accident Rate Testing section walking through the two probability knobs, the fire/collision event names, and how customers compute the rate. The 'What's Supported' table was removed as redundant with the new run-modes section."
+        },
+        {
+          "title": "Customer meeting follow-up email drafted",
+          "detail": "Met with customer on the just-delivered TeraSim + CNDE + Autoware package. Three follow-ups captured in a reply email: (1) extend the accident-rate script from per-class fire counts to a final rate with a clearly-defined denominator (per-run / per-mileage / per-simulated-hour); (2) add every adversity class to the roundabout scenario (currently the only large gap in scenario coverage); (3) continue tightening long-duration stability, building on the root-cause work already in progress."
+        }
+      ],
+      "in_progress": [
+        {
+          "title": "Diagnose the libsumo deadlock that killed both fastcheck runs overnight",
+          "detail": "Yesterday's two parallel fastcheck runs (cnde+adversity, no Autoware, --scale 0.1) both died: run01 made it to sim_t=2157s / 67% of NCRC route before locking up at edge 2227845261#0; run02 only reached sim_t=469s / 13% before locking up at 44114271521#0. Both showed the same pattern as the Autoware run that died the day before — Python process stayed 'Rl+' state on CPU with the libsumo step never returning, all threads pinned on futex_wait_queue, sumo-gui window gone. The watchdog correctly detected zero Δsim_t over 10 min and killed them, but had no auto-restart logic at the time (operator was sleeping). Root cause investigation is the precondition before re-running parallel batches."
+        }
+      ],
+      "todo": [
+        {
+          "title": "Extend accident_summary with a true rate metric",
+          "detail": "Per customer ask: add accident_rate = AV_collisions / denominator where denominator is configurable (per run, per simulated km from tripinfo.xml's routeLength, per simulated hour from loguru_run.log)."
+        },
+        {
+          "title": "Add a roundabout scenario covering all adversity classes",
+          "detail": "Identify a suitable roundabout junction on the NCRC route (or build a short standalone scenario), and ensure every vehicle adversity class (lc / lcabort / leader / follower / headon / merge / tfl) can be triggered there."
+        },
+        {
+          "title": "Rework the fastcheck watchdog with auto-restart + per-attempt output dirs",
+          "detail": "Current watchdog only kills stuck runs but doesn't restart. Rewrite so each slot keeps an attempt counter, every restart spawns into its own attempt-tagged output dir (preserving the dead-run's logs for forensics), and accident_summary is dumped into the live attempt's dir every 10 min."
         }
       ]
     }
