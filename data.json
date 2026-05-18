@@ -2,7 +2,7 @@
   "name": "Haotian",
   "role": "Simulation Engineer",
   "company": "Inchor Mobility",
-  "last_updated": "2026-05-15",
+  "last_updated": "2026-05-18",
   "days": [
     {
       "date": "2026-05-07",
@@ -380,6 +380,59 @@
         {
           "title": "Rework the fastcheck watchdog with auto-restart + per-attempt output dirs",
           "detail": "Current watchdog only kills stuck runs but doesn't restart. Rewrite so each slot keeps an attempt counter, every restart spawns into its own attempt-tagged output dir (preserving the dead-run's logs for forensics), and accident_summary is dumped into the live attempt's dir every 10 min."
+        }
+      ]
+    },
+    {
+      "date": "2026-05-18",
+      "completed": [
+        {
+          "title": "Built a CNDE↔NADE-adversity trajectory-conflict logger (design + module + integration)",
+          "detail": "When CNDE is enabled, both the MotionTransformer NN and the adversity manager can issue commands for the same BV in the same tick; the merge function at packages/terasim-nde-nade/terasim_nde_nade/envs/nade.py:308 silently keeps NADE's command and drops CNDE's whenever NADE is not DEFAULT, with no record of what was discarded. New module packages/terasim-nde-nade/terasim_nde_nade/utils/trajectory_conflict_logger.py installs a per-tick observer at that exact merge point. It emits one JSONL record per veh_id with fields {sim_time, tick, veh_id, in_nade, in_cnde, nade_cmd_type, nade_adversity_class, cnde_first_point, sumo_current, cnde_sumo_offset_m, resolution} and resolutions ∈ {cnde_won, nade_won_adversarial, cnde_dropped_membership, nade_only, default_only}. Lazy file open + flush-on-every-write means it's crash-safe; entirely env-var gated (TRAJECTORY_CONFLICT_LOG=1) so existing runs are byte-identical when disabled. Full design at docs/superpowers/specs/2026-05-18-cnde-adversity-trajectory-conflict-logging-design.md. First CNDE-on run (sim8) produced 19,368 records and showed dyn_bv_20 toggling between cnde_won and FollowerAdversity for >50s before the run crashed — exactly the silent-drop pattern the logger was built to catch."
+        },
+        {
+          "title": "Root-caused why AV bypass LC was silently rejected, fixed via SUMO TraciLaneChangePriority bits",
+          "detail": "AV would issue LEFT/RIGHT every tick when blocked by a static-adversity stalled object 311m → 28m ahead, but the lane index never changed; AV crawled into the obstacle. Reading /home/haotian/.terasim/deps/sumo/src/microsim/MSVehicle.cpp Influencer::setLaneChangeMode and the TraciLaneChangePriority enum in MSVehicle.h: bits 8–9 of laneChangeMode encode the priority; the code constant _LC_MODE_BYPASS = 256 (bits 8–9 = 01) is LCP_NOOVERLAP — TraCI LC silently rejected whenever any neighbor overlaps AV's body in the target lane. The in-tree comment claimed it was 'TraCI commands respected' but that's only true with a clear gap. Changed envs/nade_with_av.py:1107 _LC_MODE_BYPASS = 0 (LCP_ALWAYS — change regardless of blockers, SUMO adapts blocker speeds) and vehicle/nde_controller.py:621 mode_value = 0 if veh_id == AV else 256 (BVs keep 256 for adversarial maneuver safety). End-to-end verification (sim7): AV depart=10.1s arrive=3851.9s routeLength=21,490.93m rerouteNo=0 finish_reason=AV_left — the full predefined NCRC route, no detours, with 5658 av_bypass_fire events and 1327 lc_fire + 9037 leader_fire + 1104 follower_fire + 176 tfl_fire."
+        },
+        {
+          "title": "Fixed body-overlap check for AV's reactive force-moveTo teleport (replaced naive behind-only filter)",
+          "detail": "The reactive bypass path force-teleports AV laterally when it's stopped < 0.1 m/s and within 15m of a slow leader. Previous safety filter at envs/nade_with_av.py:~1210 only rejected the teleport when 'a vehicle is 0–10m BEHIND AV in the target lane'; a vehicle whose front sat at av_pos with its body extending backwards was missed entirely. In sim 'sim5' AV teleported onto dyn_bv_34 at lane 4117050240_3 → next libsumo.executeMove segfaulted. Replaced with a precise body-interval intersection test: tgt_body = [av_pos + 1 − av_len, av_pos + 1]; for each neighbor v on the target lane, compute v_body = [v_front − v_len, v_front] and reject if the intervals overlap with a 0.5 m clearance margin. Uses real getLength() per neighbor instead of a blanket 15m window so it doesn't over-reject. Adds an INFO log on rejection with the exact intervals so future debug is easier. Verified in sim6 — 90+ rejections fired across one run, no executeMove segfault from this path."
+        },
+        {
+          "title": "Junction-lane guards at four call sites — adversity_manager, leader_adversity, controller, AV bypass",
+          "detail": "Calling traci.vehicle.* on a vehicle whose current lane id starts with ':' (an internal junction lane) corrupts SUMO's internal data structures in libsumo (in-process, no boundary check) and the corruption surfaces as a SIGSEGV on the next executeMove. Added consistent guards: (1) utils/adversity/adversity_manager.py:derive_command — bail out early with a no-op DEFAULT command when ego is on an internal lane OR missing from traci.vehicle.getIDList(); (2) utils/adversity/leader_adversity.py:derive_leader_adversarial_command — same checks plus a try/except around traci.vehicle.getLeader (which itself can segfault on a fragile vehicle); (3) vehicle/nde_controller.py:execute_trajectory_command — skip ALL trajectory control while the vehicle is on an internal lane, BEFORE setSpeedMode/setLaneChangeMode are called (these were running first under the old code and likely contributed to the corruption); (4) envs/nade_with_av.py:predict_av_control_command — top-of-function bail when AV itself is on an internal lane. Each guard eliminated a distinct crash signature observed in sim11–14."
+        },
+        {
+          "title": "Tried + reverted a DTM route-aware BV spawn fix (would-be issue 3)",
+          "detail": "User reported BVs occasionally make abrupt lane-changes 'at the finish line' — e.g. a BV travels straight in a lane then sweeps left right before a junction. Confirmed mechanism: DTM's ahead-spawn branches at packages/terasim-nde-nade/terasim_nde_nade/utils/dynamic_traffic_manager.py:467,503 pick t_lane = random.randint(0, n_lanes-1); BVs inherit AV's route from spawn_edge onwards (lcStrategic=10 boost at spawn). On edges where only specific lanes connect to the next route edge (e.g. 4117050240 has 4 lanes but only lane 3 → 4126464931#0), BVs spawned on a non-compatible lane must do an aggressive last-second strategic LC near the junction, which from a top-down view looks like a left turn. Implemented a helper _route_compatible_lanes() that filters spawn lanes via traci.lane.getLinks against the route's next edge. Worked as advertised — but sim10 showed AV got stuck on edge 4411907471#0 for 178s and SUMO triggered a rerouter (rerouteNo=1, routeLength dropped 21.5km → 3.6km). The denser route-correct BV distribution starved AV's lane of throughput. Reverted the DTM patch; documented as 'same strategic-LC mechanism as AV's own behaviour on this map — not a bug, the map's lane connectivity is the cause'."
+        },
+        {
+          "title": "Created Multica issue INC-164 + bound this Claude session + moved to ISUZU Project",
+          "detail": "Filed 'TeraSim NCRC: libsumo executeMove segfault during AV route traversal' as INC-164 (high priority, assigned to haotian) with full reproduction, all Python-side guards (file:line), verified outcomes for sim7/sim8/sim11, root-cause hypothesis, and a session-reference comment listing every sim 4→14 run's outcome and where the artifacts live (/home/haotian/.claude/jobs/02d28ff6/). Used the multica-sync-plugin: `multica issue create --priority high --description-file …`, `mc-bind INC-164` to bind this repo, `multica issue update INC-164 --project 1356d87a-…` to assign to ISUZU Project, `multica issue comment add INC-164 --content-file …` for the session pointer. Plugin's auto-sync-on-SessionEnd hook is dormant per spec for non-TTY/background sessions so the binding ensures future interactive sessions in TeraSim land on INC-164 directly."
+        }
+      ],
+      "in_progress": [
+        {
+          "title": "ASAN-instrumented libsumo run against NCRC — catching the libsumo executeMove segfault at the C level",
+          "detail": "Built a -fsanitize=address debug version of libsumo into /home/haotian/.terasim/sumo-asan-build/ (separate from the pip-installed conda env libsumo at /home/haotian/miniconda3/envs/terasim/lib/python3.10/site-packages/libsumo/, which is untouched). Output _libsumo.so verified to have 782 asan symbols + libasan.so.8 in its ldd. Running NCRC under it with `PYTHONPATH=/home/haotian/.terasim/deps/sumo/tools LD_PRELOAD=libasan.so.8 ASAN_OPTIONS='halt_on_error=1:detect_leaks=0:malloc_context_size=30' python scripts/run_experiment_cnde.py …`. ASAN slowdown is steep (~100× sim-time vs real-time observed — much worse than the 3-10× textbook number); after 1h elapsed AV is at sim_time ~117s, vs the historical crash window of ~300–450s, so ETA to the crash is several more hours. When SIGSEGV hits, ASAN will print the heap-use-after-free / out-of-bounds-write trace with three back-stacks (current access, free, alloc) — that's the precise root cause we've been chasing. Waiter (bt367g1hm) + monitor (b29bl5na2) armed to notify on exit."
+        },
+        {
+          "title": "Parallel printf-instrumented libsumo subagent — faster path to the bad TraCI call",
+          "detail": "Dispatched a parallel subagent to build a RelWithDebInfo (no ASAN) libsumo into ~/.terasim/sumo-debug-build/ with fprintf(stderr, '[TRACI] t=… fn=… veh=… edge=… lane=… pos=…') at the entry of every suspect TraCI write — moveToXY, moveTo, setSpeed, setSpeedMode, setLaneChangeMode, changeLane, changeLaneRelative, remove — plus [STEP] executeMove_start/_end markers in MSEdgeControl. Each fprintf wrapped in try/catch since the underlying state-fetch (getRoadID/getLaneID) is itself fragile on junction lanes and must never raise out of the instrumentation. Build ETA 5-10 min, sim ETA 3-15 min at normal speed. The last [TRACI] line before the segfault tells us which call corrupted state; an [STEP] executeMove_start with no matching _end tells us the corruption was already there before the C-level step started. Runs entirely in parallel; both approaches will land independently and INC-164 will get the findings from whichever fires first."
+        }
+      ],
+      "todo": [
+        {
+          "title": "Apply the C-level fix once ASAN/printf identifies the corruption site",
+          "detail": "All of today's Python-side guards (junction guards at four call sites, body-overlap teleport check, existence checks, LC-mode correction) eliminate specific crash modes but the next deeper one keeps surfacing because libsumo (in-process) gives TraCI writes direct access to SUMO internals — there's no boundary between Python and SUMO's C++ data structures. The right fix is a libsumo Vehicle.cpp pre-check at the entry of position/control writes that refuses to operate on vehicles in fragile states (internal lane, mid-removal, mid-collision) and returns a TraCIException to Python rather than corrupting state. Once ASAN or the printf trace localizes the exact entry function, decide whether to upstream a SUMO patch or maintain a local libsumo fork."
+        },
+        {
+          "title": "Decide whether TrajectoryConflictLogger should be always-on telemetry vs opt-in env-var",
+          "detail": "Right now it's gated by TRAJECTORY_CONFLICT_LOG=1 so default runs are byte-identical to the pre-existing pipeline — necessary for the initial deployment. The cnde_dropped_membership and nade_won_adversarial counts it surfaced in sim8 (4 + 25 records, plus a clear dyn_bv_20 CNDE↔adversity toggle pattern) are real evidence of silent state-corruption risk. Worth promoting to default-on telemetry alongside accident_diag.jsonl, scrubbed of AV records (current logger emits 4164 AV rows from an addict.Dict default-empty quirk — fix the in_nade detection to require a real CommandType before counting AV). Also expand to capture full 5-point CNDE trajectory not just first point — easy add already noted in the design's out-of-scope section."
+        },
+        {
+          "title": "Stress-test the junction-lane guards against a roundabout / multi-junction scenario",
+          "detail": "Current verification only covers the NCRC linear route. The junction-lane guards prevent corruption per-junction-traversal but the patches were derived from observing crashes on the NCRC route specifically. A roundabout scenario where AV enters and exits multiple internal lanes per lap, combined with adversaries that try to fire on junction-resident BVs, would exercise the four guards more thoroughly. The DTM helper from yesterday's revert (_route_compatible_lanes) could also be useful here if we control just the inflow lane selection. Park until INC-164's root cause is landed."
         }
       ]
     }
