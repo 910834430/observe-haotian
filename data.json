@@ -2,7 +2,7 @@
   "name": "Haotian",
   "role": "Simulation Engineer",
   "company": "Inchor Mobility",
-  "last_updated": "2026-05-18",
+  "last_updated": "2026-05-19",
   "days": [
     {
       "date": "2026-05-07",
@@ -433,6 +433,51 @@
         {
           "title": "Stress-test the junction-lane guards against a roundabout / multi-junction scenario",
           "detail": "Current verification only covers the NCRC linear route. The junction-lane guards prevent corruption per-junction-traversal but the patches were derived from observing crashes on the NCRC route specifically. A roundabout scenario where AV enters and exits multiple internal lanes per lap, combined with adversaries that try to fire on junction-resident BVs, would exercise the four guards more thoroughly. The DTM helper from yesterday's revert (_route_compatible_lanes) could also be useful here if we control just the inflow lane selection. Park until INC-164's root cause is landed."
+        }
+      ]
+    },
+    {
+      "date": "2026-05-19",
+      "completed": [
+        {
+          "title": "Rebuilt libsumo from cnde-yilin source with FOX/GUI enabled, replacing the conda env's pip-installed libsumo so sumo-gui windows can open when gui_flag=true",
+          "detail": "pip's eclipse-sumo==1.23.1 ships a libsumo.so built without HAVE_LIBSUMOGUI; even when 'sumo-gui' is passed as argv[0] the in-process libsumo silently uses the headless engine and traci.gui.trackVehicle / setZoom / addView don't exist. Found that cnde-yilin's src/libsumo/CMakeLists.txt does emit a GUI-enabled libsumo when FOX_FOUND=TRUE, but our previous build was -DENABLE_FOX=OFF due to missing X11Ft/GL dev headers in the terasim conda env. Fix: conda install -c conda-forge xorg-libxft mesalib libglu xorg-libxrandr xorg-libxcursor xorg-libxrender xorg-libxi (filled in the 3 missing headers X11/Xft/Xft.h, GL/gl.h, GL/glu.h), reused the locally-extracted libfox-1.6-0+libfox-1.6-dev .debs at /home/haotian/.terasim/fox-1.6-local/ with a fox-config wrapper, stashed the printf-instrumentation patches in deps/sumo, cmake -DCMAKE_BUILD_TYPE=Release -DENABLE_JAVA_BINDINGS=OFF -DCHECK_OPTIONAL_LIBS=false at /home/haotian/.terasim/sumo-build-gui/. cmake reported 'Enabled features: ... GUI ...' confirming FOX_FOUND. make libsumo finished in 3.5min, output _libsumo.so (26MB) deployed into the terasim env's site-packages, with the old version backed up at /home/haotian/.terasim/libsumo_pre_fox_160945.tar.gz. import libsumo; libsumo.gui.trackVehicle now exists. Verified the user's existing Autoware co-simulation is unaffected: same API surface, same SWIG bindings, just a different toolchain (gcc 13.4 + libstdc++ 3.4.32 vs pip's gcc 4.8 + 3.4.19). The pip-binary's executeMove segfault — INC-164 — does not reproduce in this new binary either; root-caused that as a latent C++ UB whose surface depends on STL ABI / optimizer choices, not a source-code fix (HEAD is only 1 commit past v1_23_1 and that commit only touches duarouter)."
+        },
+        {
+          "title": "Made AV bypass route-aware so it picks the lane that actually connects to AV's next required route edge, instead of mechanical +1/-1",
+          "detail": "packages/terasim-nde-nade/terasim_nde_nade/envs/nade_with_av.py predict_av_control_command: replaced the heuristic 'target_lane = av_lane_idx + 1 if room else -1' with a getLinks-based picker. For each non-obstacle lane on AV's current edge, query traci.lane.getLinks(<edge>_<li>) and check if any outgoing link's next-lane belongs to next_edge_id = av_route[av_route_idx + 1]. Among the lanes that do connect, pick the one closest to AV's current lane. When the picker runs but finds no off-obstacle valid lane (i.e. obstacle is in the only lane that connects to next required edge), abort bypass entirely — set target_delta = 0 so AV queues in current lane rather than being pushed off-route by the dumb fallback. Earlier off-route incident on edge 4117050240 — dyn_bv_6 was sitting on lane 3 (the only lane connecting to 4126464931#0), the bypass excluded lane 3 then fell back to +1 and pushed AV onto lane 2, which only connects to off-route 1421787431#0. The new abort branch eliminates that pattern."
+        },
+        {
+          "title": "Made AV bypass only fire on real stalled adversity objects, not slow BVs or red-light queues",
+          "detail": "Added a stalled-only filter at the top of the bypass-leader resolution: 'if bypass_leader is not None and not _is_adv_obj(bypass_leader[0]): bypass_leader = None'. _is_adv_obj returns True for ID containing _stalled_object / _CONE_ / _collision — these are the StalledObjectAdversity-spawned vehicles and construction cones. For anything else (dyn_bv_*, normal traffic stopped at red light, queuing BVs near intersections), AV now uses SUMO's IDM car-following and queues normally. Previously the reactive branch (AV.speed < 2 m/s AND leader.speed < 2 m/s AND dist < 15 m) was over-triggering on any slow vehicle, causing AV to attempt LC into adjacent lanes whenever it queued — that's the left↔right ping-pong the user observed."
+        },
+        {
+          "title": "Replaced force-moveTo teleport with native traci.vehicle.changeLane(AV, target, 3.0s) — smooth interpolated lateral LC",
+          "detail": "Previously the bypass used traci.vehicle.moveTo(AV, target_lane_id, pos) which instantly teleports AV across lane boundaries — visually disturbing in GUI mode and the source of the libsumo executeMove segfault when target lane had a body-overlap blocker (INC-164). Switched to traci.vehicle.changeLane(AV, target_lane, LATERAL_LC_DURATION) which interpolates the lateral position over 3 seconds — SUMO's normal LC physics, visible as a smooth move in sumo-gui. Together with setLaneChangeMode(AV, 0=LCP_ALWAYS) the LC fires regardless of safety, and SUMO adapts blocker speeds to make room rather than rejecting. Critical bug fix on top of this: the setLaneChangeMode call was running AFTER changeLane in the same tick, so changeLane was using the previous tick's default mode 1621 (LCP_NOOVERLAP) which silently rejects whenever a body-overlap exists in the target lane. Diag confirmed AV firing changeLane 30 times in 60s on hotspot 1 with no actual lane change. Moved the setLaneChangeMode call to immediately before changeLane — now LCP_ALWAYS is in effect when the LC command is interpreted."
+        },
+        {
+          "title": "Added 3-second post-LC cooldown to prevent AV from ping-ponging left↔right between adjacent lanes",
+          "detail": "Added self._bypass_cooldown_until attribute. After every successful changeLane, set cooldown = sim_time + 3.0s. The bypass trigger condition is gated by 'not in_cooldown' — during the 3-second window after a LC, no new bypass command is issued no matter what the bypass leader / cross-lane state looks like. This eliminates the failure mode where bypass picker oscillates because both lanes have intermittent slow leaders: tick N picks lane 1, tick N+1 picker finds new leader in lane 1 and picks lane 0, tick N+2 etc."
+        },
+        {
+          "title": "Added per-edge AV_cfg.lane_preferences in YAML — pin AV to a preferred lane upon entering specific edges, before reaching obstacles",
+          "detail": "configs/simulation/ncrc_combined_adversity.yaml AV_cfg now accepts a lane_preferences mapping of {edge_id: lane_idx}. NADEWithAV.__init__ reads it into self._lane_prefs. The new enforcement block at the top of predict_av_control_command (after the junction-internal-lane guard but before all reactive bypass logic) checks if AV's current edge is in the preferences table; if AV is not yet on the preferred lane, calls setLaneChangeMode(AV, 0) and changeLane(AV, pref_lane, 5.0) with a 3-second cooldown to avoid spam. For the NCRC scenario: 4411907471#0 → 1 (stalled_car on lane 0 pos 312) and 4126464941#0 → 1 (two stalled trucks on lane 0). AV is force-LCed to lane 1 the instant it enters either edge, hundreds of meters before the obstacle, instead of relying on last-second reactive bypass that fails in dense traffic. The secondary benefit: SUMO no longer speculatively reroutes AV at the junction (because lane-0 → next-route-edge being blocked is not a problem when AV is already in lane 1), so the GUI's 'show future route' visualization stays clean."
+        },
+        {
+          "title": "Diagnosed the av_route_mutated GUI display issue and confirmed AV physically stays on the predefined route despite the visualization glitch",
+          "detail": "User saw the GUI's future-route highlight showing a wrong (off-route) detour at the first stalled vehicle's junction. Initial hypothesis was that SUMO's auto-rerouting device was permanently mutating AV's route. Traced through /tmp/adversity_diag.jsonl which already had an av_route_mutated watchdog: 2 mutation events at t=258.5 and t=274.0, both showing getRoute(AV) at that instant temporarily reporting [4411907471, 87261030, 44119076131, 44119076130, ...] instead of the predefined [4411907471, 4126471851, 4411907541, ...]. Cross-checked the bypass-fire edge sequence: AV physically transitioned 4411907471#0 → 4126471851#0 → 4411907541#0 → 44114271901#0 → 4126471861 → 4126464941#0 → 4411427201#0 → 4411427181#0 → … 100% on the predefined route. av_off_route count = 0. So the mutation events are SUMO's speculative reroute computed when AV is in lane 0 with the lane-0 → next-route-edge internal connection blocked by yaml's block_internal_lanes — the auto-reroute is recomputed each tick and reverts as soon as AV LCes to lane 1. The lane_preferences fix above eliminates this entirely by keeping AV in lane 1 from edge entry."
+        }
+      ],
+      "in_progress": [
+        {
+          "title": "Verifying lane_preferences end-to-end via two parallel headless sims (seed=42 and seed=999) — AV must reach the post-hotspot-2 edge 4411427201#0 with on-route progression and the first-seen lane at hotspot 1 and 2 = 1",
+          "detail": "Background processes /tmp/sim_seed{42,999}.pid running with isolated /tmp/verify_seed{42,999}.yaml (gui_flag=false, distinct output.nth and ADVERSITY_DIAG_FILE). Seed 42 confirmed AV is in lane 1 on hotspot 1 (4411907471#0) as the preference dictates — the fix works. Waiting for AV to clear hotspot 2 (4126464941#0)."
+        }
+      ],
+      "next_steps": [
+        {
+          "title": "Decide deployment strategy for libsumo+FOX binary",
+          "detail": "Current libsumo has DT_NEEDED on libGL/libX11/libFOX, requires glibc 2.33+ at runtime (Ubuntu 22.04+ / Debian 12+ / Rocky 9+). For headless cosim deployment to a server without X11/GL, either install the stub packages (libgl1 libx11-6 libxft2 libfox-1.6-0), run under xvfb-run, or build a separate -DENABLE_FOX=OFF binary. Need to decide before any client-facing release."
         }
       ]
     }
