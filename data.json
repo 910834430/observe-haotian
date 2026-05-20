@@ -2,7 +2,7 @@
   "name": "Haotian",
   "role": "Simulation Engineer",
   "company": "Inchor Mobility",
-  "last_updated": "2026-05-19",
+  "last_updated": "2026-05-20",
   "days": [
     {
       "date": "2026-05-07",
@@ -478,6 +478,51 @@
         {
           "title": "Decide deployment strategy for libsumo+FOX binary",
           "detail": "Current libsumo has DT_NEEDED on libGL/libX11/libFOX, requires glibc 2.33+ at runtime (Ubuntu 22.04+ / Debian 12+ / Rocky 9+). For headless cosim deployment to a server without X11/GL, either install the stub packages (libgl1 libx11-6 libxft2 libfox-1.6-0), run under xvfb-run, or build a separate -DENABLE_FOX=OFF binary. Need to decide before any client-facing release."
+        }
+      ]
+    },
+    {
+      "date": "2026-05-20",
+      "completed": [
+        {
+          "title": "CNDE memory leak fix verified — _agents_id_per_step scrub stops unbounded growth, RSS flat at 6.2 GB for 21 min after warmup",
+          "detail": "Root-caused the CNDE OOM as AgentRecordManager.proceed_step appending a fresh list of agent IDs every tick (~6 KB per entry) without ever releasing old contents. Older entries are referenced for index stability (lookups by absolute timestep), but only their length matters — the NN reads ≤_STATES_HISTORY_CAP=20 recent steps and all operational code uses [-_STATES_HISTORY_CAP:] slices. Patch at packages/cnde/csim/manager/manager.py line 451 replaces contents of entries older than _STATES_HISTORY_CAP*3 with [], preserving len() and indexed access while freeing the payload. Validation via memory_tracking.jsonl quartiles: Q1 +20 MB/min (warmup), Q2 +0 MB/min (FLAT, ✅), vs. user's parallel unpatched run hitting +700–840 MB/min in Q3/Q4 and reaching 80 GB RSS in 2h 25min. Pushed as ab9f163 to both inchor-mobility/cnde-yilin and SaferDrive-AI/cnde-yilin."
+        },
+        {
+          "title": "Diagnosed second perf regression after the leak fix — INC-143 'predict_future doubling regime' hitting 5.5s → 24s → 368s/step",
+          "detail": "After the leak fix, observed env_step times of 5.5 s while adversity_ms was only 25 ms — the bulk was elsewhere. Added per-sub-call instrumentation in nade.py NADE_decision that writes a record to nade_decision_timing.jsonl whenever total > 500 ms (one perf_counter pair, near-zero overhead). The data attributes 99.99 % of slow steps to predict_environment_future_trajectory (nade.py:447 → trajectory_predictor.py:583). Pattern in the data is unmistakable exponential doubling: sim_t 1318.4=680 ms → 1318.9=1291 → 1319.1=2704 → 1319.6=5587 → plateau ~5500 ms for 13 sim-s → reset to 700 ms for 7 sim-s → next doubling rises past the original plateau to 22 s, then in user's longer run all the way to 368 s/step at sim_t 1405. The 'reset' behaviour shows the regime is state-driven not algorithmic O(N²). Source code already references INC-143 by name in a comment at nade.py:441, so this is a re-occurrence of a known issue."
+        },
+        {
+          "title": "Located the likely state amplification path — CNDE TRAJECTORY commands in 'continuing' mode feeding ever-longer future_trajectory arrays into NADE re-interpolation",
+          "detail": "trajectory_predictor.py:451 (CommandType.TRAJECTORY branch) reads control_command.future_trajectory and re-runs interpolate_future_trajectory (the Cython version that calls scipy.interp1d) every step. update_control_cmds_from_predicted_trajectory at tools.py:127 REPLACES not appends, so the array shouldn't grow there — but the loguru evidence shows the slow phase begins precisely when 'Control commands: 0 CNDE + 3 continuing' lines start appearing for dataset-replay BVs (id pattern v_2021-09-12_*). Hypothesis: CNDE itself emits progressively longer trajectories when adversarial-trajectory mode is sticky on a dataset BV, and NADE re-interpolation of those long arrays at 0.5 s resolution makes interp1d's source-points × target-points cost dominate."
+        },
+        {
+          "title": "Added INC-143 diagnostic instrumentation to predict_future_trajectory_vehicle",
+          "detail": "trajectory_predictor.py TRAJECTORY branch now logs {veh_id, ft_n, ft_dt, end_time} to PREDICT_FUTURE_DIAG=/tmp/predict_future_diag.jsonl whenever len(future_trajectory) ≥ 5. Gated by env var so production runs without PREDICT_FUTURE_DIAG set are unaffected (the path defaults to /tmp/predict_future_diag.jsonl but the cost is one open/write/close per call, still trivial). This will confirm whether future_trajectory length grows over time in 'continuing' mode for the dataset BVs."
+        },
+        {
+          "title": "Recovered and committed trajectory_conflict_logger.py — file referenced by nade.py but never tracked in git",
+          "detail": "nade.py imports TrajectoryConflictLogger from utils.trajectory_conflict_logger (9 grep hits across class init, set_output_path, log_merge, log_summary, close) but the 274-line implementation file was untracked in HEAD. Fresh clones of cnde-yilin would fail with ImportError. Committed the file as part of d018a18 alongside the diag instrumentation. The logger is no-op unless TRAJECTORY_CONFLICT_LOG=1, so production behaviour is unchanged."
+        },
+        {
+          "title": "Pushed 2 focused commits to both remotes; rejected debug-only overlay.py change before commit",
+          "detail": "ab9f163 (CNDE leak fix, manager.py +14 lines) and d018a18 (trajectory_conflict_logger.py +274 / trajectory_predictor.py +17 / ncrc_combined_adversity.yaml +1/-1 enabling CNDE / run_experiment_cnde.py +1 import sys). Before committing I reverted local overlay.py changes that had stubbed out faulthandler.enable() for ASAN runs — keeping those upstream would silently lose segfault traces for every other developer. .multica/ session dir and various .bak_pre_* debug snapshots were also kept out. Both inchor-mobility/cnde-yilin and SaferDrive-AI/cnde-yilin now at d018a18."
+        }
+      ],
+      "in_progress": [
+        {
+          "title": "Awaiting kill authorization for user's PID 847138 (80 GB RSS, trending toward OOM in ~60 min) before restarting a clean diag-instrumented run",
+          "detail": "User had a parallel sim running since before this session: 2h 25min wall, 80 GB RSS / 60.6 % mem, sim_t advancing 0.4 sim-s per 30 min wall (predict_future = 368 s/step). System free memory dropped from 60 GB → 40 GB in 30 min = 670 MB/min, projecting OOM of the whole 125 GB box. Cannot kill the user's process without explicit authorization — flagged the OOM trajectory and the recommendation to kill; waiting for the user to confirm before restarting with PREDICT_FUTURE_DIAG instrumentation to capture the future_trajectory growth pattern."
+        }
+      ],
+      "next_steps": [
+        {
+          "title": "Capture future_trajectory length distribution and implement INC-143 fix",
+          "detail": "Once the diag-instrumented sim runs for a few minutes covering both fast and slow phases, the /tmp/predict_future_diag.jsonl distribution should show whether ft_n grows over time for the v_2021-09-12_* dataset BVs in continuing-adversarial mode. Two candidate fixes depending on what the data shows: (a) cap future_trajectory to ceil(time_horizon_step × time_resolution / control_command.time_resolution) + 1 points before passing to interp1d, drop earlier-than-now waypoints — bounds interp cost to ~10 source points regardless of CNDE output length; (b) skip the TRAJECTORY-mode re-interpolation entirely when the command is a 'continuing' carry-over from a prior CNDE cycle, since CNDE already emitted fresh waypoints at that resolution. Option (a) is safer (preserves existing behaviour for short trajectories); option (b) is faster but couples NADE more tightly to CNDE state semantics."
+        },
+        {
+          "title": "Confirm leak fix + INC-143 fix together enable full NCRC loop completion ('正常跑完一圈')",
+          "detail": "Success criterion is the AV completing all 129 edges of the NCRC route end-to-end without sim crash, segfault, or step-time freeze. With memory bounded (leak fix verified) and predict_future bounded under ~200 ms, estimated wall-time to complete a full route at ~5–7 m/s AV speed over ~30 km is 30–40 min. Run with seed=42 + gui_flag=false for speed, then re-run with gui_flag=true to capture the trajectory replay the user wants for verification."
         }
       ]
     }
