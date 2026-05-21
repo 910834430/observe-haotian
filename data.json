@@ -2,7 +2,7 @@
   "name": "Haotian",
   "role": "Simulation Engineer",
   "company": "Inchor Mobility",
-  "last_updated": "2026-05-20",
+  "last_updated": "2026-05-21",
   "days": [
     {
       "date": "2026-05-07",
@@ -523,6 +523,47 @@
         {
           "title": "Confirm leak fix + INC-143 fix together enable full NCRC loop completion ('正常跑完一圈')",
           "detail": "Success criterion is the AV completing all 129 edges of the NCRC route end-to-end without sim crash, segfault, or step-time freeze. With memory bounded (leak fix verified) and predict_future bounded under ~200 ms, estimated wall-time to complete a full route at ~5–7 m/s AV speed over ~30 km is 30–40 min. Run with seed=42 + gui_flag=false for speed, then re-run with gui_flag=true to capture the trajectory replay the user wants for verification."
+        }
+      ]
+    },
+    {
+      "date": "2026-05-21",
+      "completed": [
+        {
+          "title": "Root-caused INC-143 to NDEController.all_checks_on's findRoute+setRoute pair — full NCRC route now completes end-to-end under both seed=42 and seed=1000",
+          "detail": "Spent the day chasing the 2^N route-doubling pattern that capped sim progression at sim_t ~850-1525 across 12 attempts. Each Python-side defense (route_length_list cache, raw-route cache, slice truncation, degenerate-route quarantine, traci.route.add + setRouteID replacement) bought another few hundred sim-s before SUMO's internal route storage ballooned again. Final breakthrough was instrumenting every route-mutating traci API via a monkey-patch in utils/agents/vehicle.py with ROUTE_TRACE=1 env var, dumping per-call caller stacks to /tmp/route_trace.jsonl. In ~5 min of sim, dyn_bv_5 alone got 76 setRoute calls — all traced back to nde_controller.py:746 (now :736) inside all_checks_on, which fires every CNDE release cycle and does traci.simulation.findRoute(current, dest) followed by traci.vehicle.setRoute(veh_id, route_stage.edges). The interaction between SUMO's setRoute and findRoute on a mid-route vehicle is what feeds the perfect 2^N doubling, up to 2^26 = 67M edges per BV before SUMO's own step() hangs in C++ for 12+ minutes."
+        },
+        {
+          "title": "Applied a one-line guard: skip the reroute block entirely when original_route already exceeds 1000 edges",
+          "detail": "Fix at packages/terasim-nde-nade/terasim_nde_nade/vehicle/nde_controller.py — in all_checks_on, after `original_route = traci.vehicle.getRoute(veh_id)`, if len(original_route) > 1000 the whole findRoute + setRoute + lane-check + revert block is skipped. SUMO continues with the existing route fine, and DTM despawns the BV on distance when it leaves the AV vicinity. Tested both seeds: seed=42 ran 3167 sim_t / 31528 steps with 13847 adversity fires, av_final_edge = 4117050250 (the last edge of the configured route). Seed=1000 ran 3401 sim_t / 33864 steps with 12903 fires, same final edge. RSS stayed flat at ~5.7 GB for the entire run in both cases vs the baseline OOM at 80 GB."
+        },
+        {
+          "title": "Companion perf fixes: per-route and per-edge caches in get_vehicle_info to bound per-tick predict_future cost",
+          "detail": "Three module-level caches in utils/agents/vehicle.py: _ROUTE_ID_CACHE (tuple(route) -> route_id_list after sumolib.route.addInternal), _ROUTE_LEN_CACHE (tuple(route_id_list) -> traci.lane.getLength per edge), _LANE_LEN_CACHE (edge_id -> length). Plus _RAW_ROUTE_CACHE per veh_id that only refetches traci.vehicle.getRoute() once the vehicle has advanced past a forward window — avoids the ~1s libsumo→Python marshal when SUMO's stored route is large from pre-fix simulations. Also added a forward-only slice of veh_info.route to [idx-1, idx+30] so all downstream operations are bounded regardless of SUMO's storage size. Together with the all_checks_on guard, predict_future_ms now stays well under 200ms throughout a full NCRC route, vs the 5.5s → 24s → 368s doubling plateau seen before any of the fixes."
+        },
+        {
+          "title": "Pushed 2 focused commits to both inchor-mobility/cnde-yilin and SaferDrive-AI/cnde-yilin",
+          "detail": "eba6558 'fix(cnde): guard all_checks_on against route doubling — completes INC-143' (43 insertions / 30 deletions in nde_controller.py) and 12add0d 'perf(cnde): cache route_length_list + raw-route per vehicle' (75 insertions / 19 deletions in utils/agents/vehicle.py). Two remotes both moved d018a18..12add0d. The earlier ROUTE_TRACE monkey-patch instrumentation, per-call timing diag, and outer-loop diag were intentionally not committed — they were debugging-only and obscure the small actual fix in the diff."
+        },
+        {
+          "title": "Bonus: INC-164 libsumo executeMove segfault (the C++ UB I was tracking with UBSAN rebuilds) also stopped reproducing with the route-doubling fix in place",
+          "detail": "Seed=42 used to hit executeMove segfault at sim_t 900.2; with the all_checks_on guard, the same seed now completes the full route. Reasonable hypothesis is that the segfault was downstream of SUMO's internal state corruption from the route doubling — once the route stops blowing up, the C++ UB doesn't get its trigger condition either. Still want a proper UBSAN/Valgrind rebuild of libsumo before client release, but it's no longer the bottleneck for ongoing co-sim testing."
+        }
+      ],
+      "in_progress": [
+        {
+          "title": "Watching whether the guard's >1000-edge threshold catches all doubling cases or needs tuning",
+          "detail": "The verified runs at 5.7 GB RSS suggest the threshold catches the doubling early enough that no BV's SUMO route grows into the multi-million range. But for adversarial scenarios where CNDE holds a BV controlled for many minutes, the route might still inch past 1000 organically without doubling. Worth instrumenting a quick distribution of original_route lengths under heavy adversity to confirm the threshold is well above normal but well below degenerate."
+        }
+      ],
+      "next_steps": [
+        {
+          "title": "Find the actual SUMO code path that interprets findRoute + setRoute as 'append' instead of 'replace'",
+          "detail": "The guard works as a clean defense, but the underlying SUMO/libsumo behavior is a real bug worth reporting upstream. To repro minimally: a vehicle on a route mid-journey, call findRoute(current_edge, original_dest_edge) to get a fresh forward path, then setRoute(veh, that_path). Expectation: SUMO's route equals that_path. Observed: route equals the_path concatenated with prior route, doubling on repeated calls. Need a minimal SUMO test case isolated from CNDE, then file a SUMO issue and/or rebuild libsumo with the suspect MSRoute code instrumented."
+        },
+        {
+          "title": "Run a longer batch (10+ seeds, 2h+ each) to confirm the fix is stable across the full distribution of CNDE-adversity scenarios",
+          "detail": "Two seeds passing is strong but not conclusive. A batch run across seeds=7, 42, 100, 314, 999, 1000, 2026 (the historical INC-164 batch plus our two verified) with the fix in place would establish whether sim completion rate is now ~100% vs the prior ~33%. Can do this with parallel headless invocations and the existing accident_summary.json output for aggregation."
         }
       ]
     }
