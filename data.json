@@ -2,7 +2,7 @@
   "name": "Haotian",
   "role": "Simulation Engineer",
   "company": "Inchor Mobility",
-  "last_updated": "2026-05-21",
+  "last_updated": "2026-05-22",
   "days": [
     {
       "date": "2026-05-07",
@@ -598,6 +598,49 @@
           "detail": "Two seeds passing is strong but not conclusive. A batch run across seeds=7, 42, 100, 314, 999, 1000, 2026 (the historical INC-164 batch plus our two verified) with the fix in place would establish whether sim completion rate is now ~100% vs the prior ~33%. Can do this with parallel headless invocations and the existing accident_summary.json output for aggregation."
         }
       ]
+    },
+    {
+      "date": "2026-05-22",
+      "completed": [
+        {
+          "title": "事故率重设计完整实施：Bernoulli probability gate 内置 trigger() + 7 个 adversity class 全部改",
+          "detail": "原来 yaml 里 per-class `probability` 是个二值开关——0.0 跳过、1.0 force-commit、(0,1) 走 IS sampling 跟全局 adversity_sampling_probability 走，实际执行率跟 per-class 值脱节。重设计后 Bernoulli 抽样移到 `trigger()` 里：所有几何/位置/AV-targeting 过滤都通过之后才抽 Bernoulli(self._probability)，通过则 `*_fire` 写出 + `fired++`、不通过 `prob_skipped++`。`derive_command` 里改成 `command.prob = 1.0` 让 NADE 层 force-commit，绕开 IS 路径。改动覆盖 7 个 vehicle adversity 子类 (leader/follower/lanechange/lanechangeabort/headon/merge/trafficrule) 同 pattern。lcabort 特殊：Bernoulli 挂在 `lcabort_actual_fire` 之前而不是 `lcabort_fire`，因为后者是 considered 几何机会、不是 fire 本身。全局 adversity_sampling_probability 加 deprecation warning。设计文档 `docs/accident_rate_redesign_2026-05.md`。"
+        },
+        {
+          "title": "Crash attribution + conditional / absolute accident rate 进 run summary + accident_summary.json",
+          "detail": "在 `_print_run_summary` 里加 fire → AV-crash 归因：扫 diag 时把每个 `*_fire` 事件按 BV id 存 `fires_by_veh[veh].append((event, t, loc))`；二次扫 `collision_tick(av_involved=True)`，取 collider/victim 中非 AV 的那个 BV，在它的 fire 历史里找 collision 前 5 秒最近一次 fire，把这次 crash 归给那个 adversity class。Summary 新增三块输出：`accident_attribution` (av_collisions_attributed per class + no_attribution)、`conditional_accident_rate_by_class` (crashes/fires per class，理论上不随 probability 变)、`absolute_accident_rate` (crashes/sim_duration_s + crashes/km，从 tripinfo.xml 读 AV routeLength)。控制台 + accident_summary.txt + accident_summary.json 三处都加。"
+        },
+        {
+          "title": "6-sim 验证 (NDE+CNDE × p∈{1.0, 0.3, 0.1}) 全部跑完 138 边主 NCRC route",
+          "detail": "对主 yaml 跑 6 个独立 run 验证设计行为。Bernoulli per-eligible 精确：p=0.3 实测 Leader fire/eligible=0.3001、Follower 0.3180、Lanechange 0.2232 (n=233 sample variance)；p=1.0 全部 prob_skipped=0。Fires 总数大致随 probability 缩放但 noise 大：CNDE Leader 5557→2514→687 (100%/45%/12%)，NDE Leader 1007→1112→414。AV crashes 不严格单调 (NDE 7/12/10, CNDE 3/4/6) — 因为低 probability 下 AV 久不被攻击 → 防御松懈 → 单次攻击命中率高 (complacency effect, docs 里说明这是真实道路也有的现象)。Roundabout adversity 在所有 6 个 run 都 fire。验证报告 `docs/accident_rate_verification_2026-05.md`。"
+        },
+        {
+          "title": "客户文档 + README 完整改造：accident_rate.md, accident_rate_redesign, accident_rate_verification",
+          "detail": "客户拿到 3 份新 doc + 一段 README 重写。`docs/accident_rate.md`：客户操作手册，说明 conditional/absolute 两个指标的公式和含义、`probability` 旋钮的新语义、`accident_summary.json` 字段、5-秒 lookback 归因、多 run 聚合公式 (`fleet_rate_per_million_km = Σ(crashes)/Σ(km)*1M`)。`docs/accident_rate_redesign_2026-05.md`：设计 rationale、为什么旧 `fired/detected` 不是事故率、deprecation 决策。`docs/accident_rate_verification_2026-05.md`：6-sim 数据表 + 4 大观察 + Plan §6 验证清单。README 重写 'Accident Rate Testing' 全节 (148 行)：拉出 conditional vs absolute 概念对比表、新 YAML 语义、客户 picking probability 的实践指南。"
+        },
+        {
+          "title": "把误导的 `fired / detected rate` 列从 run summary 删掉",
+          "detail": "客户看到 Leader 1880 detect → 735 fire 显示 1.880% rate 立刻误解为事故率。但这个 ratio = fired / 全部 trigger() 调用次数，分母被 sim 时长 × BV 数量主导，跟 adversity 危险度无关。三个不同 rate 摆一起 (这个旧的 + conditional + absolute) 极易混淆。删除控制台 + txt 的这一列，只剩每类 fired 数量 + per-location 分解。accident_summary.json 里 `fire_rate_by_event` 保留为 back-compat 但字段改名 `detected` → `detected_checks`、去掉 `rate`/`rate_pct` key、加注释 'NOT an accident rate'。User 看了一眼当场指出问题、确认删。"
+        },
+        {
+          "title": "libsumo-rebuild skill + customer doc: 客户能 reproduce production libsumo binary",
+          "detail": "客户 deliverable 之一。`.claude/skills/libsumo-rebuild/SKILL.md`：Claude Code 自动 trigger 的 skill (`---name/description---` frontmatter)；步骤 0-7 覆盖 sumo source sanity check、3 个 UB patch (UB#1 MSLaneChanger.h、UB#2 MSLink.cpp、UB#3 MSLCM_LC2013.cpp) 检测和 git apply、FOX-1.6 toolkit 准备、cmake -DENABLE_FOX=ON 配置、make libsumo、`mv old.so old.bak; cp new.so old.so` 安全 redeploy 避免 SIGBUS、验证 `MFXSingleEventThread` 嵌进 .so 证明 GUI capability 起来。skill 文件 gitignored 所以 `docs/libsumo_rebuild.md` 镜像了一份 push 进 git，README 'Rebuilding libsumo' 节链接进去。"
+        },
+        {
+          "title": "Post-rebuild verification §7 加进 libsumo rebuild walkthrough",
+          "detail": "客户重 build 完后短 smoke test 不够 — INC-164 UB 是要在密集交通跑几分钟才触发的。`§7 Post-rebuild verification loop`：(7.1) NDE standalone 先跑全 138-edge NCRC 主场景 ~20min wall，验证 5 条 stability criteria — 进程 clean exit、RUN SUMMARY 打印、AV last edge == 4117050250、TOTAL fires > 1000、accident_summary.json 写出。(7.2) NDE 稳了开 CNDE 跑同场景 ~30min，额外查 CUDA OOM 不出、step time 不漂移。(7.3) 失败 → diagnose → patch → rebuild → re-verify 循环到两 mode 都跑完整 route。每种 failure 模式映射到具体 troubleshooting 方向 (segfault → faulthandler_trace.txt，AV 卡住 → 调 flow period，0 fires → 检查 location classifier)。"
+        },
+        {
+          "title": "Lane preferences fix 修 idx 14 lane trap (AV 过 stalled 后被 SUMO LC 推到左转 only 车道卡死)",
+          "detail": "用户 parallel 跑发现 AV 偶尔在 `4411427181#0` (idx 14, 第二个 stalled 之后) 卡死、SUMO GUI 上未来路径显示错误转向。逐层查 lane mapping：stalled 在 `4126464941#0_0`，`lane_preferences` 把 AV 推到 lane 1 (clear)。lane 1 → `4411427201#0_1` (唯一连接) → SUMO LC 50% 概率走到 `4411427181#0_2`。问题：`4411427181#0_2` 是 **左转 only**，唯一出口是 `2227868421#0`，不在 AV route 里。AV 卡在这条 lane 上没法继续直行，连续 14+ ticks speed 0，最终被 `--time-to-teleport` 强行传送出去。修复：lane_preferences 加 `4411427201#0: 0` (转到能接 `4411427181#0_0/_1` 的 source lane) + `4411427181#0: 1` (纯直行 only lane)。3 NDE + 1 CNDE robust 验证全部跑完整 138 边、`stuck@4411427181_speed0 = 0`。"
+        },
+        {
+          "title": "B2 maps + routing files 同步上传：客户 sync_maps.sh 拿到含 lane-swap 的最新 net.xml",
+          "detail": "今天 commit `3a2152a` 改的只是 yaml 里 lane_preferences (git tracked)，但更早 (5-21) 的 net.xml hand-edit 改动是 gitignored maps dir。运行 `bash scripts/upload_maps.sh` 把 `examples/maps/ann_arbor_full/` (44 files)、`examples/maps/520toRapp/` (26 files)、`configs/simulation/520toRapp_adversities/` (10 files)、`packages/cnde/` (1999 files) 同步上 B2。rclone manifest md5 比对：`aa_fixed_enhanced.net.xml` 本地 `9e45dcb6...` == B2 manifest 一致；`aa_with_types.rou.xml` (350MB)、`aa_with_types_freedepart.rou.xml` (313MB)、`ncrc_stage1_bvs.rou.xml`、`aa.tls.xml` 都已在 bucket。客户完整获取：`git pull` (拿 cnde-yilin HEAD `3a2152a`) + `bash scripts/sync_maps.sh` (从 B2 拉最新地图)。"
+        }
+      ],
+      "in_progress": [],
+      "next_steps": []
     }
   ],
   "weekly_reports": [
