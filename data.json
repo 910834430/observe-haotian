@@ -2,7 +2,7 @@
   "name": "Haotian",
   "role": "Simulation Engineer",
   "company": "Inchor Mobility",
-  "last_updated": "2026-05-22",
+  "last_updated": "2026-05-26",
   "days": [
     {
       "date": "2026-05-07",
@@ -641,6 +641,43 @@
       ],
       "in_progress": [],
       "next_steps": []
+    },
+    {
+      "date": "2026-05-26",
+      "completed": [
+        {
+          "title": "把 cnde-yilin rebase 到 main：改用净差重放 (squash) 而非逐提交，产出干净分支 cnde-yilin-rebased",
+          "detail": "目标是让 cnde-yilin 成为基于 main 的干净分支。先尝试逐提交 git rebase main（106 个提交），但在第 6 个提交就发现 cnde-yilin 与 main 是语义级分叉——cnde-yilin 删除/重写了 main 在并行开发中保留并改进的代码（例如 main 的 StalledObjectAdversity 仍调用 create_truck_type/create_emergency_police_type/create_pedestrian_type 三个 helper，而 cnde-yilin 把定义和调用都删了）。逐提交 replay 会在中间态反复猜测、产生大量不可运行的中间提交。于是改走净差重放：从 main 顶端 (e5fc9e3) 新建 cnde-yilin-rebased，用 git merge --squash cnde-yilin 一次性做 3-way 合并，整棵树只产生 7 个冲突文件（对比逐提交 rebase 的 100+ 次停顿）。动手前建了备份分支 cnde-yilin-backup-20260526 兜底，真正的 cnde-yilin 和 main 全程未动。"
+        },
+        {
+          "title": "解决 7 处合并冲突并验证：结果 = cnde-yilin 全部工作 + main 16 个提交贡献，语法校验通过",
+          "detail": "7 个冲突逐一按『main 最终态 vs cnde-yilin 最终态』判定一次：.gitignore 取并集；run_experiments_debug.py 与 nade.py（# @profile 注释 + cnde-yilin 的 NDE step-timing 日志块）取 cnde-yilin；setup_environment.sh 取 cnde-yilin 的 conda 感知版 check_python（取 main 会留下没有 fi 配对的悬空 if，坏 bash）；stalled_object.py 删掉 main 的车型 helper（合并后已无调用方，因 cnde-yilin 改用 _object_type 字符串方案，故安全，但 main 的 emergency/pedestrian/truck stalled-object 车型在本分支被丢弃——列为重点 review 项）；两个 urban_construction_zone 文件（connection_manager.py、urban_construction_simple.py）整体取 cnde-yilin，其运行时 TraCI 版修了 TLS phase 不匹配 / libsumo segfault，且是 main 版的超集。Python 与 bash 语法全部通过，无残留冲突标记。结果 vs cnde-yilin 仅差 27 个 main 独有文件（gym 支持、.github Claude workflows、terasim_envgen 地图工具、dynamic_object 紧急车辆更新、visualize_3d 等），证明两边工作都被正确合并。"
+        },
+        {
+          "title": "把整个 packages/cnde/ 移出版本控制（363 文件 ~40MB 二进制），杜绝推上云端",
+          "detail": "发现 cnde-yilin 一直跟踪了 packages/cnde/ 下 363 个文件，含一个 19MB 的 .npy 及多个 1–3MB 的 .npy/.pkl/.png 数据与权重产物，原 .gitignore 只排除了两个 fork（nuplan-devkit、tuplan-garage）。在 cnde-yilin-rebased 上执行 git rm -r --cached packages/cnde（取消跟踪、保留本地 2009 个文件），并把那两条 fork 专属规则合并成整目录 packages/cnde/。因为 cnde-yilin-rebased 建在从未跟踪 cnde 的 main 之上，其整条历史加暂存树都是零 cnde blob——一旦采纳并 force-push，远程走向分支将彻底不含 cnde。暂存文件数从 515 降到 152。"
+        }
+      ],
+      "in_progress": [
+        {
+          "title": "cnde-yilin-rebased 待 review + commit + 采纳",
+          "detail": "净差以暂存（未提交）形式留在 cnde-yilin-rebased（基于 main），按 no-auto-commit 习惯不自动提交代码。待 review 7 处冲突解决（尤其 stalled_object.py 丢弃 main 车型 helper 那项）后 commit，再 git branch -f cnde-yilin 指过来并 force-push 覆盖 origin/cnde-yilin。注意备份分支 cnde-yilin-backup-20260526 与现有 origin/cnde-yilin 历史里仍含旧 cnde blob，只有 force-push 干净分支后,远程走向分支才不含 cnde。对应 INC-242。"
+        }
+      ],
+      "next_steps": [
+        {
+          "title": "Review cnde-yilin-rebased 的 7 处冲突解决",
+          "detail": "重点确认 stalled_object.py 丢弃 main 的 create_truck_type/emergency_police/pedestrian 是否可接受。"
+        },
+        {
+          "title": "满意后 commit 并 force-push 覆盖 origin/cnde-yilin",
+          "detail": "git branch -f cnde-yilin cnde-yilin-rebased 后强推；远程走向分支自此不含 packages/cnde。"
+        },
+        {
+          "title": "INC-242：决定 cnde / hht-dev 分支去留 + 身份统一",
+          "detail": "hht-dev 仅在 upstream；origin 上是 cnde-yilin + main。结合这次清理一并定分支策略。"
+        }
+      ]
     }
   ],
   "weekly_reports": [
