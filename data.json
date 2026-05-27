@@ -2,7 +2,7 @@
   "name": "Haotian",
   "role": "Simulation Engineer",
   "company": "Inchor Mobility",
-  "last_updated": "2026-05-26",
+  "last_updated": "2026-05-27",
   "days": [
     {
       "date": "2026-05-07",
@@ -688,6 +688,47 @@
         {
           "title": "确认长 NCRC accrate run 不再生成 monitor.json 的影响：复现论文 unbiased IS 估计需 clean on_stop 或增量落盘 weight",
           "detail": "发现最近的 accrate runs（accrate_nde_p0_1、accrate_cnde_p0_3_retry、seed1_inc143_verify、roundabout_short_gui）都没有 monitor.json，尽管 yaml 里 log_flag:true 且 NADEWithAV 仍在累加 importance_sampling_weight。原因是 monitor.json 只在 NADE.on_stop() 里落盘，而这些 138-edge 长路线大概率被强制终止/超时退出，没走到 clean on_stop（对照 ncrc_baseline_full 正常跑完则有 monitor.json，weight=1.0）。隐患：若 ISUZU accident-rate 复现要用论文的 weight×crash 无偏估计，现在拿不到 likelihood ratio，等于丢了 IS 权重，只能退回 accident_summary 的有偏 observed rate。下一步要么保证仿真 clean exit，要么把 weight 改成增量落盘（每步 flush 到磁盘），避免长 run 异常退出丢失 monitor.json。"
+        }
+      ]
+    },
+    {
+      "date": "2026-05-27",
+      "completed": [
+        {
+          "title": "把 TeraSim accident-rate 切到论文 importance-sampling 范式（is 模式）：command.prob 恢复为校准 p、q=clip(p×IS_magnitude,5%)、全轨迹权重，端到端跑通并验证",
+          "detail": "在 packages/terasim-nde-nade/envs/nade.py 加 accident_rate_mode='is' 分支：把每个对抗命令的 command.prob 从 redesign 的 force-commit 1.0 覆写回 constants.py 的校准自然率 p（按 predicted_collision_type 查 _IS_P_BY_TYPE），从而解除 force-commit、让 get_IS_prob 的 IS 抽样真正运行、weight 按 ∏(p/q) 累积写入 monitor.json。配套在 nade_with_av.py（standalone 实际走的路径）挂钩、run_parallel_cnde_test.py 注入 is 模式 + tag，并新增 scripts/aggregate_accident_rate.py（无偏聚合器，self-test 用 2-tick 玩具世界证明 E_q[1{crash}·W]=真值、朴素计数高估）。证据：日志出现 ndd_prob=校准p、IS_prob=q、weight 按 ∏p/q 演化（实测从 1.0→6.4e-3→4e-6），monitor.json weight 不再恒为 1.0。这是全部后续工作的基础——把『跑 NADE 仿真→无偏 crash rate』的链路接通。所有改动均未提交、留 review（遵守 no-auto-commit）。"
+        },
+        {
+          "title": "系统排查『哪些对抗能撞到 IDM AV』+ 用 commit 级证据归因：只有 LeaderAdversity（后方加速追尾）可靠致撞，cut-in/TLS/follower 几乎撞不上",
+          "detail": "用 collision.xml × loguru『select adversarial』日志做 commit 级时间耦合归因（取代不可靠的 *_fire 提案级 5 秒回溯）。结论：AV 撞车几乎全部来自 LeaderAdversity（BV 从后方 ff_accel 怼上来、AV 无处可逃）；cut-in 触发上千次仅 1 次撞车——因为它只是『纯变道』无后续急刹，遂实现两阶段 brake-check（切入成功后 3s 内急刹），但 demo+is 双模式测试显示 IDM AV 仍能刹住躲开；TLS 闯红灯触发数百次 0 撞车——查明触发时 BV 离 AV 中位数 45m、时序对不上，且 IDM AV 在路口主动让行（论文里 TLS 能撞是 Autoware 预测 bug，IDM 没有）。根本结论：对 SUMO-IDM 这个天生避撞的 AV，只有『后方硬怼』能撞；cut-in/TLS/follower 撞不上本身是有效安全结论。已加 IS_P_FLOOR/TFL_AV_RANGE_M/TERASIM_DYN_TARGET 等 env 旋钮辅助排查。"
+        },
+        {
+          "title": "诊断并解决 importance-sampling 权重坍缩：blanket 放大无甜点（扫 IS_magnitude 全坍缩），定位根因=每 episode 提交次数过多，给出 per-event 归因 + refractory 稀疏化两个有效解",
+          "detail": "整段 episode 的 ∏(p/q) 在密集 NCRC 下坍缩到 1e-31~1e-42（权重谱跨 32 个数量级），因为 AV 被攻击几十次、(1/20)^几十→0。扫 IS_magnitude{50,200,800} 证明 blanket 放大无可用甜点（任何出撞车的档都坍缩，且实证了『加大放大无法抬高 rate，无偏性把它压回 0』）。两个解：(1) per-event 归因（新增 scripts/aggregate_perevent.py）——每次撞车只按致因机动的 p/q 加权、拥堵撞车单列排除，稳定（CV 0.45）；(2) refractory 稀疏化——把 nade.py 硬编码的 5.5s IS 冷却做成 env 可调 IS_REFRACTORY_S，扫 60/300/600/1500s，提交/episode 随之 21→6→3→2→1、权重谱 7.9e32×→…→7.6×，ref≥episode 长度（1 提交/episode）时彻底不坍缩、原版论文式 per-episode 估计量可用（rate≈7.1e-4/mile），代价是每趟只一次 NADE、低效需多跑。"
+        },
+        {
+          "title": "核实并标定 highway rear-end 的 ground truth：SHRP2 NDS 熟练成年驾驶追尾撞击率 1.8/百万英里 → per-tick 换算 ×5.7 标定 = 1.85e-8，替换 constants.py 占位的 0.0",
+          "detail": "WebSearch 核实 SHRP2 Naturalistic Driving Study：rear-end striking crash rate = 1.8/百万英里(熟练成年)、13.5(新手青少年)。逐步核实 per-tick 换算 1.8e-6/mile ×(29m/s×0.1s÷1609.34)=3.24e-9/tick，正好对上 spec 文档 base 3.25e-9；×5.7(=highway_cutin 的 NDE→机动标定因子 3.2e-5/5.59e-6)=1.85e-8。已写入 constants.py 替换 highway_rearend_prob=0.0 占位符。配合论文人类总体率 3.0e-6/mile，追尾占~60%。强调 p 是数据事实、不可调来粉饰结果——框架价值是诚实测量（论文 Autoware 测出比人类差 1000×）。"
+        }
+      ],
+      "in_progress": [
+        {
+          "title": "accident-rate 方法定型：per-event 归因（高效+稳定，CV 0.45）vs refractory-稀疏化原版 IS（论文式 per-episode 但每趟仅 1 次 NADE、低效）的取舍",
+          "detail": "确认了三方案的边界：论文精确 q=ε·V/C 需要连续 P(A|s,u) surrogate 撞车概率模型（TeraSim 开源版没有、研究级工作量）；原版 TeraSim IS（flat 放大 magnitude=20）+ per-episode 全轨迹权重在密集 NCRC 必然坍缩；只有 per-event 或『1对抗/趟』能用。per-event 对 per-mile 率而言归因更正确（一次撞车只该按致因那刀加权、不背整段无关 commit）。全部记入 docs/accident_rate_importance_sampling.md §1–§16。"
+        }
+      ],
+      "next_steps": [
+        {
+          "title": "ref=1500 多跑 episode（如 n=36）收紧 7.1e-4/mile 的置信区间、确认稳定；或直接采用 per-event 作为标准 accident-rate 算法",
+          "detail": "当前 ref=1500 仅 n=12、8 次撞车 → ~35% 相对误差。需更多 episode 把 CI 压窄。"
+        },
+        {
+          "title": "放宽 FollowerAdversity 几何，测 AV『主动撞前车』率——这才与人类主动撞击率 1.8e-6 可比（当前撞车 70/71 是 AV 被追尾、非其过错，不可直接比）",
+          "detail": "解决 §14 striking-vs-struck 语义问题。"
+        },
+        {
+          "title": "用同一套方法跑 CNDE（cnde.enabled:true）出 NDE/CNDE 对比；论文精确对齐则需另建 P(A|s,u) surrogate",
+          "detail": "CNDE 是 yaml 开关，IS/per-event 逻辑共用。"
         }
       ]
     }
