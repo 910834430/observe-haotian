@@ -2,7 +2,7 @@
   "name": "Haotian",
   "role": "Simulation Engineer",
   "company": "Inchor Mobility",
-  "last_updated": "2026-05-27",
+  "last_updated": "2026-05-28",
   "days": [
     {
       "date": "2026-05-07",
@@ -709,7 +709,32 @@
         {
           "title": "核实并标定 highway rear-end 的 ground truth：SHRP2 NDS 熟练成年驾驶追尾撞击率 1.8/百万英里 → per-tick 换算 ×5.7 标定 = 1.85e-8，替换 constants.py 占位的 0.0",
           "detail": "WebSearch 核实 SHRP2 Naturalistic Driving Study：rear-end striking crash rate = 1.8/百万英里(熟练成年)、13.5(新手青少年)。逐步核实 per-tick 换算 1.8e-6/mile ×(29m/s×0.1s÷1609.34)=3.24e-9/tick，正好对上 spec 文档 base 3.25e-9；×5.7(=highway_cutin 的 NDE→机动标定因子 3.2e-5/5.59e-6)=1.85e-8。已写入 constants.py 替换 highway_rearend_prob=0.0 占位符。配合论文人类总体率 3.0e-6/mile，追尾占~60%。强调 p 是数据事实、不可调来粉饰结果——框架价值是诚实测量（论文 Autoware 测出比人类差 1000×）。"
+        }
+      ],
+      "in_progress": [
+        {
+          "title": "accident-rate 方法定型：per-event 归因（高效+稳定，CV 0.45）vs refractory-稀疏化原版 IS（论文式 per-episode 但每趟仅 1 次 NADE、低效）的取舍",
+          "detail": "确认了三方案的边界：论文精确 q=ε·V/C 需要连续 P(A|s,u) surrogate 撞车概率模型（TeraSim 开源版没有、研究级工作量）；原版 TeraSim IS（flat 放大 magnitude=20）+ per-episode 全轨迹权重在密集 NCRC 必然坍缩；只有 per-event 或『1对抗/趟』能用。per-event 对 per-mile 率而言归因更正确（一次撞车只该按致因那刀加权、不背整段无关 commit）。全部记入 docs/accident_rate_importance_sampling.md §1–§16。"
+        }
+      ],
+      "next_steps": [
+        {
+          "title": "ref=1500 多跑 episode（如 n=36）收紧 7.1e-4/mile 的置信区间、确认稳定；或直接采用 per-event 作为标准 accident-rate 算法",
+          "detail": "当前 ref=1500 仅 n=12、8 次撞车 → ~35% 相对误差。需更多 episode 把 CI 压窄。"
         },
+        {
+          "title": "放宽 FollowerAdversity 几何，测 AV『主动撞前车』率——这才与人类主动撞击率 1.8e-6 可比（当前撞车 70/71 是 AV 被追尾、非其过错，不可直接比）",
+          "detail": "解决 §14 striking-vs-struck 语义问题。"
+        },
+        {
+          "title": "用同一套方法跑 CNDE（cnde.enabled:true）出 NDE/CNDE 对比；论文精确对齐则需另建 P(A|s,u) surrogate",
+          "detail": "CNDE 是 yaml 开关，IS/per-event 逻辑共用。"
+        }
+      ]
+    },
+    {
+      "date": "2026-05-28",
+      "completed": [
         {
           "title": "诊断并定位 cnde-yilin 分支对 adversity 加的 AV-targeting 几何门控是 cut-in/TLS 几乎撞不上的根因；用 main 原版替换 7 个 adversity 文件",
           "detail": "对比 main vs cnde-yilin 的 vehicle adversity 文件：cnde-yilin 把每个 adversity 文件加到 main 版的 2-5 倍大小（lanechange 198 vs 54、trafficrule 260 vs 53、leader 156 vs 54），加的都是 AV-targeting 几何约束（BV 必须在 AV 正前方 0-80m、必须在目标车道、必须跨路径与 AV 冲突等）+ Bernoulli 门控 + 诊断日志。这些是 demo 模式『单次仿真要可靠攻击 AV』的合理设计，但被错误地施加到 is 模式时，把 NADE 真实想要的『广候选 + IS 抽样让对抗稀疏发生』压缩到了『只测对准 AV 的窄子集』，正好排除了大量真能撞 AV 的几何情形。用 `git show main:` 把 7 个文件（lanechange/lanechangeabort/trafficrule/leader/follower/headon/merge）替换为 main 原版（每个仅 ~50 行的极简 location-only 触发），保留 nade.py 的 is-mode 基础设施（command.prob 覆写为校准 p）和聚合器。"
@@ -729,27 +754,11 @@
       ],
       "in_progress": [
         {
-          "title": "accident-rate 方法定型：per-event 归因（高效+稳定，CV 0.45）vs refractory-稀疏化原版 IS（论文式 per-episode 但每趟仅 1 次 NADE、低效）的取舍",
-          "detail": "确认了三方案的边界：论文精确 q=ε·V/C 需要连续 P(A|s,u) surrogate 撞车概率模型（TeraSim 开源版没有、研究级工作量）；原版 TeraSim IS（flat 放大 magnitude=20）+ per-episode 全轨迹权重在密集 NCRC 必然坍缩；只有 per-event 或『1对抗/趟』能用。per-event 对 per-mile 率而言归因更正确（一次撞车只该按致因那刀加权、不背整段无关 commit）。全部记入 docs/accident_rate_importance_sampling.md §1–§16。"
-        },
-        {
           "title": "正式选定 accident-rate 算法：main canonical NADE adversity + is-mode + per-event 归因 → 稳定 1.82e-3/mile（CV 0.37），可信",
           "detail": "替换 main 版 + per-event 归因后估计量稳定、各类对抗都在真实自然率下触发、撞车归因 commit 级可靠。剩下要注意的是：1.82e-3 主要是『AV 被追尾』率（leader 主导）非『AV 主动撞』率（follower 几何稀有几乎不触发），跟人类主动撞击率 1.8e-6 比要带这个 caveat。"
         }
       ],
       "next_steps": [
-        {
-          "title": "ref=1500 多跑 episode（如 n=36）收紧 7.1e-4/mile 的置信区间、确认稳定；或直接采用 per-event 作为标准 accident-rate 算法",
-          "detail": "当前 ref=1500 仅 n=12、8 次撞车 → ~35% 相对误差。需更多 episode 把 CI 压窄。"
-        },
-        {
-          "title": "放宽 FollowerAdversity 几何，测 AV『主动撞前车』率——这才与人类主动撞击率 1.8e-6 可比（当前撞车 70/71 是 AV 被追尾、非其过错，不可直接比）",
-          "detail": "解决 §14 striking-vs-struck 语义问题。"
-        },
-        {
-          "title": "用同一套方法跑 CNDE（cnde.enabled:true）出 NDE/CNDE 对比；论文精确对齐则需另建 P(A|s,u) surrogate",
-          "detail": "CNDE 是 yaml 开关，IS/per-event 逻辑共用。"
-        },
         {
           "title": "用同一套 main+is-mode 跑 CNDE（cnde.enabled:true）出 NDE vs CNDE 对比——看 NN 背景车（更平滑、互避更强）下 AV 撞车率/类型分布是否变化",
           "detail": "代码无需改，仅 yaml 翻 cnde.enabled。"
