@@ -709,12 +709,32 @@
         {
           "title": "核实并标定 highway rear-end 的 ground truth：SHRP2 NDS 熟练成年驾驶追尾撞击率 1.8/百万英里 → per-tick 换算 ×5.7 标定 = 1.85e-8，替换 constants.py 占位的 0.0",
           "detail": "WebSearch 核实 SHRP2 Naturalistic Driving Study：rear-end striking crash rate = 1.8/百万英里(熟练成年)、13.5(新手青少年)。逐步核实 per-tick 换算 1.8e-6/mile ×(29m/s×0.1s÷1609.34)=3.24e-9/tick，正好对上 spec 文档 base 3.25e-9；×5.7(=highway_cutin 的 NDE→机动标定因子 3.2e-5/5.59e-6)=1.85e-8。已写入 constants.py 替换 highway_rearend_prob=0.0 占位符。配合论文人类总体率 3.0e-6/mile，追尾占~60%。强调 p 是数据事实、不可调来粉饰结果——框架价值是诚实测量（论文 Autoware 测出比人类差 1000×）。"
+        },
+        {
+          "title": "诊断并定位 cnde-yilin 分支对 adversity 加的 AV-targeting 几何门控是 cut-in/TLS 几乎撞不上的根因；用 main 原版替换 7 个 adversity 文件",
+          "detail": "对比 main vs cnde-yilin 的 vehicle adversity 文件：cnde-yilin 把每个 adversity 文件加到 main 版的 2-5 倍大小（lanechange 198 vs 54、trafficrule 260 vs 53、leader 156 vs 54），加的都是 AV-targeting 几何约束（BV 必须在 AV 正前方 0-80m、必须在目标车道、必须跨路径与 AV 冲突等）+ Bernoulli 门控 + 诊断日志。这些是 demo 模式『单次仿真要可靠攻击 AV』的合理设计，但被错误地施加到 is 模式时，把 NADE 真实想要的『广候选 + IS 抽样让对抗稀疏发生』压缩到了『只测对准 AV 的窄子集』，正好排除了大量真能撞 AV 的几何情形。用 `git show main:` 把 7 个文件（lanechange/lanechangeabort/trafficrule/leader/follower/headon/merge）替换为 main 原版（每个仅 ~50 行的极简 location-only 触发），保留 nade.py 的 is-mode 基础设施（command.prob 覆写为校准 p）和聚合器。"
+        },
+        {
+          "title": "重跑 NDE main canonical NADE + is-mode（默认 IS_magnitude=20、真实 constants.py p）：cut-in 现在能撞 AV（之前 0），TLS 大量触发但 0 撞车证实 IDM 路口让行是真因，per-event rate 1.82e-3/mile（CV 0.37 稳定）",
+          "detail": "n=12、run_time=1500、NDE、target_count=3。各类 IS 实际提交（跨全部 run）：intersection_tfl 62 次、intersection_rearend(leader) 71 次、highway_cutin 20 次（之前 cnde-yilin 版几乎不触发非 leader 类）。撞车归因（commit 级）：intersection_rearend 55 次（77% 转化率，AV 停红灯被力 leader 怼几乎必撞）、highway_cutin 1 次（5% 转化率，新出现！）、intersection_tfl 0 次（62 次触发都 IDM 路口让行躲过去了）。因此你早上的假设部分验证：AV-targeting 确实卡死了 cut-in 触发（替换后 cut-in 撞车从 0→1）；但 TLS 的 0 撞车不是被卡的，是 IDM 路口主动让行的本质行为。揭示 IDM 真实脆弱性谱：后方力怼 77% / cut-in 5% / TLS T-bone 0%——即 IDM 停红灯的完美停车模式本身是一种被追尾的脆弱性（真人减速更糙、可能看后视镜或加速逃跑）。"
+        },
+        {
+          "title": "扫 IS refractory 验证『稀疏化提交能让原版 TeraSim IS + per-episode 不坍缩』：ref∈{5.5,60,300,600,1500}s 提交/ep 21→6→3→2→1，权重 spread 7.9e32×→3e20×→4.9e6×→3.8e4×→7.6×；ref=1500（每 episode 1 次对抗）spread 收紧到 7.6× 完全可用",
+          "detail": "把 nade.py:664 的硬编码 5.5s refractory 做成 env 可调 IS_REFRACTORY_S。扫了 5 档：refractory 越长 → 每 episode 强制提交次数越少 → 全轨迹 ∏(p/q) 的因子数越少 → spread 收窄。ref=1500s（≥episode 长度，每趟 ≤1 次对抗）spread 仅 7.6× → 原版论文式 per-episode 估计量 mean(1{crash}·W_q) 完全非退化、给出 rate≈7.1e-4/mile。证实了：(1) 坍缩根因是『每 episode 提交太多』而非『放大太狠』；(2) 长 refractory 是无偏的（只是更稀疏的 q，commit 的那刀仍按 p/q 加权）。代价：每趟仅 1 次 NADE → 撞车从 12/12→8/12、需更多 episode 收紧 CI、低效（partly defeats NADE 的高效优势）。已写入文档 §16。"
+        },
+        {
+          "title": "厘清 p 的语义和『3 因子分解』：p 是『每 tick 机动率』非『每 tick 撞车率』；NADE/IS 框架天然实现 crash = 几何机会 × 触发率 × P(撞|机动)；5.7 标定因子 = 1/P(撞|机动, 人类驾驶)",
+          "detail": "用户/同事提出『crash = potential/normal × corner_case/potential × crash/corner_case』分解 → 完美对应 TeraSim 现有的『maneuver_challenge 几何门控 × IS 抽样(p/q) × 仿真物理涌现』。数字验证（highway rearend）：p=1.85e-8/tick × 555 tick/mile × 1/5.7 = 1.8e-6 crash/mile 正好对上 SHRP2 实测。所以 spec 文档的 `3.25e-9 × 5.7 = 1.85e-8` 不是魔法——5.7 因子就是『1/P(crash|机动, 人类)』，把『机动率』翻译成『人类驾驶下的撞车率』。这个理解明确了：IS 测出的 AV 撞车率 = 第三因子在 AV 下的值 × 真实人类条件的前两个因子；AV-vs-人类对比的本质就是『第三因子（机动→撞车的避撞条件率）的 AV/人类比值』。已记入回答。"
         }
       ],
       "in_progress": [
         {
           "title": "accident-rate 方法定型：per-event 归因（高效+稳定，CV 0.45）vs refractory-稀疏化原版 IS（论文式 per-episode 但每趟仅 1 次 NADE、低效）的取舍",
           "detail": "确认了三方案的边界：论文精确 q=ε·V/C 需要连续 P(A|s,u) surrogate 撞车概率模型（TeraSim 开源版没有、研究级工作量）；原版 TeraSim IS（flat 放大 magnitude=20）+ per-episode 全轨迹权重在密集 NCRC 必然坍缩；只有 per-event 或『1对抗/趟』能用。per-event 对 per-mile 率而言归因更正确（一次撞车只该按致因那刀加权、不背整段无关 commit）。全部记入 docs/accident_rate_importance_sampling.md §1–§16。"
+        },
+        {
+          "title": "正式选定 accident-rate 算法：main canonical NADE adversity + is-mode + per-event 归因 → 稳定 1.82e-3/mile（CV 0.37），可信",
+          "detail": "替换 main 版 + per-event 归因后估计量稳定、各类对抗都在真实自然率下触发、撞车归因 commit 级可靠。剩下要注意的是：1.82e-3 主要是『AV 被追尾』率（leader 主导）非『AV 主动撞』率（follower 几何稀有几乎不触发），跟人类主动撞击率 1.8e-6 比要带这个 caveat。"
         }
       ],
       "next_steps": [
@@ -729,6 +749,18 @@
         {
           "title": "用同一套方法跑 CNDE（cnde.enabled:true）出 NDE/CNDE 对比；论文精确对齐则需另建 P(A|s,u) surrogate",
           "detail": "CNDE 是 yaml 开关，IS/per-event 逻辑共用。"
+        },
+        {
+          "title": "用同一套 main+is-mode 跑 CNDE（cnde.enabled:true）出 NDE vs CNDE 对比——看 NN 背景车（更平滑、互避更强）下 AV 撞车率/类型分布是否变化",
+          "detail": "代码无需改，仅 yaml 翻 cnde.enabled。"
+        },
+        {
+          "title": "放宽 FollowerAdversity 几何让 AV-主动撞测出来——这才直接和人类主动撞击率 1.8e-6 可比、解决 §14 striking-vs-struck 语义问题",
+          "detail": "follower 当前 0 commit，因为 main 版几何门控要求 AV 必须是 BV 的紧邻 follower。"
+        },
+        {
+          "title": "写文档 §17 记录 main 替换 + IDM 脆弱性谱（leader 77% / cut-in 5% / TLS 0% 转化率）的最终发现",
+          "detail": "今天最值得固化的实证。"
         }
       ]
     }
