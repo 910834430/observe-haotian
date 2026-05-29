@@ -643,55 +643,6 @@
       "next_steps": []
     },
     {
-      "date": "2026-05-26",
-      "completed": [
-        {
-          "title": "把 cnde-yilin rebase 到 main：改用净差重放 (squash) 而非逐提交，产出干净分支 cnde-yilin-rebased",
-          "detail": "目标是让 cnde-yilin 成为基于 main 的干净分支。先尝试逐提交 git rebase main（106 个提交），但在第 6 个提交就发现 cnde-yilin 与 main 是语义级分叉——cnde-yilin 删除/重写了 main 在并行开发中保留并改进的代码（例如 main 的 StalledObjectAdversity 仍调用 create_truck_type/create_emergency_police_type/create_pedestrian_type 三个 helper，而 cnde-yilin 把定义和调用都删了）。逐提交 replay 会在中间态反复猜测、产生大量不可运行的中间提交。于是改走净差重放：从 main 顶端 (e5fc9e3) 新建 cnde-yilin-rebased，用 git merge --squash cnde-yilin 一次性做 3-way 合并，整棵树只产生 7 个冲突文件（对比逐提交 rebase 的 100+ 次停顿）。动手前建了备份分支 cnde-yilin-backup-20260526 兜底，真正的 cnde-yilin 和 main 全程未动。"
-        },
-        {
-          "title": "解决 7 处合并冲突并验证：结果 = cnde-yilin 全部工作 + main 16 个提交贡献，语法校验通过",
-          "detail": "7 个冲突逐一按『main 最终态 vs cnde-yilin 最终态』判定一次：.gitignore 取并集；run_experiments_debug.py 与 nade.py（# @profile 注释 + cnde-yilin 的 NDE step-timing 日志块）取 cnde-yilin；setup_environment.sh 取 cnde-yilin 的 conda 感知版 check_python（取 main 会留下没有 fi 配对的悬空 if，坏 bash）；stalled_object.py 删掉 main 的车型 helper（合并后已无调用方，因 cnde-yilin 改用 _object_type 字符串方案，故安全，但 main 的 emergency/pedestrian/truck stalled-object 车型在本分支被丢弃——列为重点 review 项）；两个 urban_construction_zone 文件（connection_manager.py、urban_construction_simple.py）整体取 cnde-yilin，其运行时 TraCI 版修了 TLS phase 不匹配 / libsumo segfault，且是 main 版的超集。Python 与 bash 语法全部通过，无残留冲突标记。结果 vs cnde-yilin 仅差 27 个 main 独有文件（gym 支持、.github Claude workflows、terasim_envgen 地图工具、dynamic_object 紧急车辆更新、visualize_3d 等），证明两边工作都被正确合并。"
-        },
-        {
-          "title": "把整个 packages/cnde/ 移出版本控制（363 文件 ~40MB 二进制），杜绝推上云端",
-          "detail": "发现 cnde-yilin 一直跟踪了 packages/cnde/ 下 363 个文件，含一个 19MB 的 .npy 及多个 1–3MB 的 .npy/.pkl/.png 数据与权重产物，原 .gitignore 只排除了两个 fork（nuplan-devkit、tuplan-garage）。在 cnde-yilin-rebased 上执行 git rm -r --cached packages/cnde（取消跟踪、保留本地 2009 个文件），并把那两条 fork 专属规则合并成整目录 packages/cnde/。因为 cnde-yilin-rebased 建在从未跟踪 cnde 的 main 之上，其整条历史加暂存树都是零 cnde blob——一旦采纳并 force-push，远程走向分支将彻底不含 cnde。暂存文件数从 515 降到 152。"
-        },
-        {
-          "title": "读 Behavioral Safety Assessment 论文 (Liu et al., arXiv 2505.16214v2)：梳理 DLT+DIT 框架及 Autoware.Universe 3e-3/mile crash rate 结果",
-          "detail": "通读 25 页论文，核心是把 AV 评估范式从 functional safety（车辆中心，ISO 26262/21448/PAS 8800）转向 behavioral safety（环境中心，评估 AV 与交通环境的反应+交互行为）。框架含两个互补组件：Driver Licensing Test (DLT) 用 14 个代表性场景（cut-in、car-following、lane departure、左右转、VRU 穿行、roundabout、vehicle encroachment、traffic signal，覆盖城市 ODD 71.5% 撞车类型），每场景按碰撞所需减速度分 5 个 risk level，评估反应行为；Driving Intelligence Test (DIT) 在 Mcity 仿真完整 trip，基于自研 TeraSim 构造 NDE，再用 NADE（importance sampling，ε=3000）放大 rare event，输出统计 crash rate。关键结果：Autoware.Universe DLT 通过 6/14；DIT crash rate 3.01e-3 crashes/mile，约人类（3.00e-6）的 1000 倍；crash 类型 rear-end 72.9% / angle 22% / sideswipe 2.7% / head-on 2.4%；NDE crash rate 仿真 2.93e-6 对齐 Michigan 真实 3.00e-6（高保真）。发现 3 类系统性问题：obstacle-avoidance replanning bug（已反馈修复）、right-of-way 不主动让行、trajectory prediction 未用红绿灯信息。代码/数据开源在 zenodo 15446750 / 15446739。与 ISUZU accident-rate investigation 直接相关：DIT 的 TeraSim+NADE+14 场景 DLT 是可直接借鉴的 benchmark 方法。"
-        },
-        {
-          "title": "核对 TeraSim ISUZU 分支当前 accident-rate 算法，并确认 monitor.json 的 weight 就是论文 importance-sampling likelihood ratio",
-          "detail": "梳理两套并存的 accident-rate 范式。新路径：run_experiment_cnde.py 的 _print_run_summary() 每次仿真结束写 accident_summary.{json,txt}，含 conditional rate（per class = av_crashes_attributed/fires，在 probability 变化下不变，描述该 adversity 类的本质危险度）+ absolute rate（per run = av_collisions/sim_duration_s 或 /km，随 probability 线性缩放）；归因用 5 秒 lookback（每次 AV 碰撞往回找对方 BV 最近一次 *_fire 事件，归到对应 class，未命中进 no_attribution，实测 <5%）；触发改成每个 adversity class 独立的 Bernoulli probability 门控（在 trigger() 里抽样），替代已废弃的全局 adversity_sampling_probability。建立这套算法的核心 commit 是 3f87efe / c761ce2 / 49da60f / e282b4a / 54e537d。老路径：nade.py 的 on_stop() 把 self.record 写成 monitor.json，顶层 weight 字段 = 整轮 importance-sampling 累积权重，由 nade.py:683-700 的 weight *= ndd_adversarial_prob/IS_prob（或 normal 分支 ndd_normal_prob/(1-IS_prob)）逐步乘出，正是论文 Eq. W_q(x)=Π P(u|s)/q(u|s) 的 likelihood ratio；论文 unbiased 估计 P(A)=E[1{crash}·W_q] 用的就是这条路径。结论：两套范式不同——montior.json 是 IS 加权的无偏估计（对应论文），accident_summary 是观测频率（有偏，反映配置的 probability 混合）。"
-        }
-      ],
-      "in_progress": [
-        {
-          "title": "cnde-yilin-rebased 待 review + commit + 采纳",
-          "detail": "净差以暂存（未提交）形式留在 cnde-yilin-rebased（基于 main），按 no-auto-commit 习惯不自动提交代码。待 review 7 处冲突解决（尤其 stalled_object.py 丢弃 main 车型 helper 那项）后 commit，再 git branch -f cnde-yilin 指过来并 force-push 覆盖 origin/cnde-yilin。注意备份分支 cnde-yilin-backup-20260526 与现有 origin/cnde-yilin 历史里仍含旧 cnde blob，只有 force-push 干净分支后,远程走向分支才不含 cnde。对应 INC-242。"
-        }
-      ],
-      "next_steps": [
-        {
-          "title": "Review cnde-yilin-rebased 的 7 处冲突解决",
-          "detail": "重点确认 stalled_object.py 丢弃 main 的 create_truck_type/emergency_police/pedestrian 是否可接受。"
-        },
-        {
-          "title": "满意后 commit 并 force-push 覆盖 origin/cnde-yilin",
-          "detail": "git branch -f cnde-yilin cnde-yilin-rebased 后强推；远程走向分支自此不含 packages/cnde。"
-        },
-        {
-          "title": "INC-242：决定 cnde / hht-dev 分支去留 + 身份统一",
-          "detail": "hht-dev 仅在 upstream；origin 上是 cnde-yilin + main。结合这次清理一并定分支策略。"
-        },
-        {
-          "title": "确认长 NCRC accrate run 不再生成 monitor.json 的影响：复现论文 unbiased IS 估计需 clean on_stop 或增量落盘 weight",
-          "detail": "发现最近的 accrate runs（accrate_nde_p0_1、accrate_cnde_p0_3_retry、seed1_inc143_verify、roundabout_short_gui）都没有 monitor.json，尽管 yaml 里 log_flag:true 且 NADEWithAV 仍在累加 importance_sampling_weight。原因是 monitor.json 只在 NADE.on_stop() 里落盘，而这些 138-edge 长路线大概率被强制终止/超时退出，没走到 clean on_stop（对照 ncrc_baseline_full 正常跑完则有 monitor.json，weight=1.0）。隐患：若 ISUZU accident-rate 复现要用论文的 weight×crash 无偏估计，现在拿不到 likelihood ratio，等于丢了 IS 权重，只能退回 accident_summary 的有偏 observed rate。下一步要么保证仿真 clean exit，要么把 weight 改成增量落盘（每步 flush 到磁盘），避免长 run 异常退出丢失 monitor.json。"
-        }
-      ]
-    },
-    {
       "date": "2026-05-27",
       "completed": [
         {
@@ -777,20 +728,93 @@
       "date": "2026-05-29",
       "completed": [
         {
+          "title": "把 cnde-yilin rebase 到 main：改用净差重放 (squash) 而非逐提交，产出干净分支 cnde-yilin-rebased",
+          "detail": "目标是让 cnde-yilin 成为基于 main 的干净分支。先尝试逐提交 git rebase main（106 个提交），但在第 6 个提交就发现 cnde-yilin 与 main 是语义级分叉——cnde-yilin 删除/重写了 main 在并行开发中保留并改进的代码（例如 main 的 StalledObjectAdversity 仍调用 create_truck_type/create_emergency_police_type/create_pedestrian_type 三个 helper，而 cnde-yilin 把定义和调用都删了）。逐提交 replay 会在中间态反复猜测、产生大量不可运行的中间提交。于是改走净差重放：从 main 顶端 (e5fc9e3) 新建 cnde-yilin-rebased，用 git merge --squash cnde-yilin 一次性做 3-way 合并，整棵树只产生 7 个冲突文件（对比逐提交 rebase 的 100+ 次停顿）。动手前建了备份分支 cnde-yilin-backup-20260526 兜底，真正的 cnde-yilin 和 main 全程未动。"
+        },
+        {
+          "title": "解决 7 处合并冲突并验证：结果 = cnde-yilin 全部工作 + main 16 个提交贡献，语法校验通过",
+          "detail": "7 个冲突逐一按『main 最终态 vs cnde-yilin 最终态』判定一次：.gitignore 取并集；run_experiments_debug.py 与 nade.py（# @profile 注释 + cnde-yilin 的 NDE step-timing 日志块）取 cnde-yilin；setup_environment.sh 取 cnde-yilin 的 conda 感知版 check_python（取 main 会留下没有 fi 配对的悬空 if，坏 bash）；stalled_object.py 删掉 main 的车型 helper（合并后已无调用方，因 cnde-yilin 改用 _object_type 字符串方案，故安全，但 main 的 emergency/pedestrian/truck stalled-object 车型在本分支被丢弃——列为重点 review 项）；两个 urban_construction_zone 文件（connection_manager.py、urban_construction_simple.py）整体取 cnde-yilin，其运行时 TraCI 版修了 TLS phase 不匹配 / libsumo segfault，且是 main 版的超集。Python 与 bash 语法全部通过，无残留冲突标记。结果 vs cnde-yilin 仅差 27 个 main 独有文件（gym 支持、.github Claude workflows、terasim_envgen 地图工具、dynamic_object 紧急车辆更新、visualize_3d 等），证明两边工作都被正确合并。"
+        },
+        {
+          "title": "把整个 packages/cnde/ 移出版本控制（363 文件 ~40MB 二进制），杜绝推上云端",
+          "detail": "发现 cnde-yilin 一直跟踪了 packages/cnde/ 下 363 个文件，含一个 19MB 的 .npy 及多个 1–3MB 的 .npy/.pkl/.png 数据与权重产物，原 .gitignore 只排除了两个 fork（nuplan-devkit、tuplan-garage）。在 cnde-yilin-rebased 上执行 git rm -r --cached packages/cnde（取消跟踪、保留本地 2009 个文件），并把那两条 fork 专属规则合并成整目录 packages/cnde/。因为 cnde-yilin-rebased 建在从未跟踪 cnde 的 main 之上，其整条历史加暂存树都是零 cnde blob——一旦采纳并 force-push，远程走向分支将彻底不含 cnde。暂存文件数从 515 降到 152。"
+        },
+        {
+          "title": "读 Behavioral Safety Assessment 论文 (Liu et al., arXiv 2505.16214v2)：梳理 DLT+DIT 框架及 Autoware.Universe 3e-3/mile crash rate 结果",
+          "detail": "通读 25 页论文，核心是把 AV 评估范式从 functional safety（车辆中心，ISO 26262/21448/PAS 8800）转向 behavioral safety（环境中心，评估 AV 与交通环境的反应+交互行为）。框架含两个互补组件：Driver Licensing Test (DLT) 用 14 个代表性场景（cut-in、car-following、lane departure、左右转、VRU 穿行、roundabout、vehicle encroachment、traffic signal，覆盖城市 ODD 71.5% 撞车类型），每场景按碰撞所需减速度分 5 个 risk level，评估反应行为；Driving Intelligence Test (DIT) 在 Mcity 仿真完整 trip，基于自研 TeraSim 构造 NDE，再用 NADE（importance sampling，ε=3000）放大 rare event，输出统计 crash rate。关键结果：Autoware.Universe DLT 通过 6/14；DIT crash rate 3.01e-3 crashes/mile，约人类（3.00e-6）的 1000 倍；crash 类型 rear-end 72.9% / angle 22% / sideswipe 2.7% / head-on 2.4%；NDE crash rate 仿真 2.93e-6 对齐 Michigan 真实 3.00e-6（高保真）。发现 3 类系统性问题：obstacle-avoidance replanning bug（已反馈修复）、right-of-way 不主动让行、trajectory prediction 未用红绿灯信息。代码/数据开源在 zenodo 15446750 / 15446739。与 ISUZU accident-rate investigation 直接相关：DIT 的 TeraSim+NADE+14 场景 DLT 是可直接借鉴的 benchmark 方法。"
+        },
+        {
+          "title": "核对 TeraSim ISUZU 分支当前 accident-rate 算法，并确认 monitor.json 的 weight 就是论文 importance-sampling likelihood ratio",
+          "detail": "梳理两套并存的 accident-rate 范式。新路径：run_experiment_cnde.py 的 _print_run_summary() 每次仿真结束写 accident_summary.{json,txt}，含 conditional rate（per class = av_crashes_attributed/fires，在 probability 变化下不变，描述该 adversity 类的本质危险度）+ absolute rate（per run = av_collisions/sim_duration_s 或 /km，随 probability 线性缩放）；归因用 5 秒 lookback（每次 AV 碰撞往回找对方 BV 最近一次 *_fire 事件，归到对应 class，未命中进 no_attribution，实测 <5%）；触发改成每个 adversity class 独立的 Bernoulli probability 门控（在 trigger() 里抽样），替代已废弃的全局 adversity_sampling_probability。建立这套算法的核心 commit 是 3f87efe / c761ce2 / 49da60f / e282b4a / 54e537d。老路径：nade.py 的 on_stop() 把 self.record 写成 monitor.json，顶层 weight 字段 = 整轮 importance-sampling 累积权重，由 nade.py:683-700 的 weight *= ndd_adversarial_prob/IS_prob（或 normal 分支 ndd_normal_prob/(1-IS_prob)）逐步乘出，正是论文 Eq. W_q(x)=Π P(u|s)/q(u|s) 的 likelihood ratio；论文 unbiased 估计 P(A)=E[1{crash}·W_q] 用的就是这条路径。结论：两套范式不同——montior.json 是 IS 加权的无偏估计（对应论文），accident_summary 是观测频率（有偏，反映配置的 probability 混合）。"
+        }
+      ],
+      "in_progress": [
+        {
+          "title": "cnde-yilin-rebased 待 review + commit + 采纳",
+          "detail": "净差以暂存（未提交）形式留在 cnde-yilin-rebased（基于 main），按 no-auto-commit 习惯不自动提交代码。待 review 7 处冲突解决（尤其 stalled_object.py 丢弃 main 车型 helper 那项）后 commit，再 git branch -f cnde-yilin 指过来并 force-push 覆盖 origin/cnde-yilin。注意备份分支 cnde-yilin-backup-20260526 与现有 origin/cnde-yilin 历史里仍含旧 cnde blob，只有 force-push 干净分支后,远程走向分支才不含 cnde。对应 INC-242。"
+        }
+      ],
+      "next_steps": [
+        {
+          "title": "Review cnde-yilin-rebased 的 7 处冲突解决",
+          "detail": "重点确认 stalled_object.py 丢弃 main 的 create_truck_type/emergency_police/pedestrian 是否可接受。"
+        },
+        {
+          "title": "满意后 commit 并 force-push 覆盖 origin/cnde-yilin",
+          "detail": "git branch -f cnde-yilin cnde-yilin-rebased 后强推；远程走向分支自此不含 packages/cnde。"
+        },
+        {
+          "title": "INC-242：决定 cnde / hht-dev 分支去留 + 身份统一",
+          "detail": "hht-dev 仅在 upstream；origin 上是 cnde-yilin + main。结合这次清理一并定分支策略。"
+        },
+        {
+          "title": "确认长 NCRC accrate run 不再生成 monitor.json 的影响：复现论文 unbiased IS 估计需 clean on_stop 或增量落盘 weight",
+          "detail": "发现最近的 accrate runs（accrate_nde_p0_1、accrate_cnde_p0_3_retry、seed1_inc143_verify、roundabout_short_gui）都没有 monitor.json，尽管 yaml 里 log_flag:true 且 NADEWithAV 仍在累加 importance_sampling_weight。原因是 monitor.json 只在 NADE.on_stop() 里落盘，而这些 138-edge 长路线大概率被强制终止/超时退出，没走到 clean on_stop（对照 ncrc_baseline_full 正常跑完则有 monitor.json，weight=1.0）。隐患：若 ISUZU accident-rate 复现要用论文的 weight×crash 无偏估计，现在拿不到 likelihood ratio，等于丢了 IS 权重，只能退回 accident_summary 的有偏 observed rate。下一步要么保证仿真 clean exit，要么把 weight 改成增量落盘（每步 flush 到磁盘），避免长 run 异常退出丢失 monitor.json。"
+        }
+      ]
+    },
+    {
+      "date": "2026-05-29",
+      "completed": [
+        {
           "title": "推翻早先『IDM 路口 T-bone 无敌』的判断：加 TERASIM_TRAFFIC_SCALE env 旋钮，用 traffic_scale=3 测试发现 TLS 真的能撞 AV（2/31 commits = 6.5% 转化率，vs traffic_scale=1 时 0/62）",
           "detail": "之前在 main canonical NADE 跑下看到 TLS 大量触发(62 次)但 0 撞车，我下结论是『SUMO IDM 路口主动让行 → T-bone 几乎不可能』。haotian 怀疑可能是横流不足而非 IDM 本质。验证方法：场景 ncrc_combined_adversity.yaml 用 aa_with_types.rou.xml（自然 Ann Arbor 流量）+ roundabout_traffic.add.xml（只给环岛加横流），信号路口没有专门加横流。给并行脚本加 TERASIM_TRAFFIC_SCALE 旋钮（注入 environment.parameters.traffic_scale），test scale=3 → TLS 提交 31 次（per-run 频率类似但绝对数因 n=8 较少）、AV 撞车 2 次中归因到 TLS 的 2 次 → IDM 让行只能挡掉 ~93%，剩下 ~7% 是无法躲的（多车同时冲突、最后一刻闯入等）。还揭示一个有意思的点：TLS 因为自然率 p 高(1e-2)、q 被 5% cap 截断 → 每次 TLS 撞车权重 = p/q = 0.2 远大于 leader 的 ~3e-3 → 即便 TLS 撞车数少，加权后 rate 贡献(5.4e-3)反而超过 leader(1.1e-3) → TLS 在加密横流下是 rate 主导项。"
+        },
+        {
+          "title": "重命名两个 daily skill,理清职责:observe-haotian-updater(每日)+ notion-weekly-report-updater(周报)",
+          "detail": "把之前会混淆的两个 skill 重命名并互相交叉引用:`cnde-daily-push` → **`observe-haotian-updater`**(每日 append observe-haotian/data.json + 推送该 repo;frontmatter 与 Gotchas 都写明 scope 仅 observe-haotian、绝不 commit/push 任何其他 code repo、绝不跑 B2/cloud-map);`daily-summary` → **`notion-weekly-report-updater`**(每周 Notion Weekly Report,Team Pulse)。同步更新了 `~/Projects/Isuzu_cosim/CLAUDE.md` 第 5 行(原指向已不存在的 daily-summary),并把 `reference_observe_haotian` 记忆补上两个 skill 的指向 + 与 feedback_no_auto_commit 的关联。全局 grep 确认除 `.claude/file-history` 快照外无其他活动文件引用旧名。"
+        },
+        {
+          "title": "保留 release 候选并切回原始 cnde-yilin 供测试:cnde-yilin-rebased 提交 611b9c4(本地、未 push)",
+          "detail": "把净差重放产物提交到 `cnde-yilin-rebased` 分支(message 标 PENDING REVIEW,不 push),再 `git checkout cnde-yilin` 切回 0a31c7d。验证:`packages/cnde` 重新被跟踪 363 文件、盘上 2009 文件齐全,工作区 0 暂存 0 改动。真正的 `cnde-yilin` 与 `main` 全程未动;备份分支 `cnde-yilin-backup-20260526` 仍兜底。明天 review 时 `git checkout cnde-yilin-rebased` 即可,改了不满意随时 amend/reset。"
+        },
+        {
+          "title": "把 cnde-yilin 的 Autoware cosim 子集拆成独立分支并推到 origin + upstream:autoware-cosim @ bc4c294",
+          "detail": "对照 `upstream/hht-dev` 的拆分精神(它当年只拆 5 文件 +219 行),挑 cnde-yilin 在 cosim 这条线上的独立子集:`scripts/autoware_cosim.py`(195 行,cnde-yilin 进化版)、3 个 `configs/simulation/520toRapp_*_autoware.yaml`、`packages/terasim-service` 的 `plugins/cosim.py`(+183)/`utils/base.py`(+81)/`api.py` 等服务边,以及 `run_experiments`/`visualize_fcd`/`run_service` 小补;共 10 个实差异文件 +1070/-77。**不带 `nade_with_av.py`**(它把 AV/adversity/CNDE 钩子混在一起,留给后续 adversity 分支);**不带 `ann_arbor_cnde_autoware.yaml`**(它依赖 CNDE,留给 CNDE 分支)。在 `.claude/worktrees/autoware-cosim` 独立 worktree 操作,主 checkout 上你正在跑的 cnde-yilin 测试不受打扰。Python 语法 + YAML 校验全过;关键依赖 `ConstructionAdversity` 在 main 上 import 实测通过。已推到 **`origin/autoware-cosim`(inchor-mobility/TeraSim)** 与 **`upstream/autoware-cosim`(SaferDrive-AI/TeraSim)** 两处。PR URL: https://github.com/inchor-mobility/TeraSim/pull/new/autoware-cosim  和  https://github.com/SaferDrive-AI/TeraSim/pull/new/autoware-cosim"
         }
       ],
       "in_progress": [
         {
           "title": "扫 traffic_scale ∈ {2, 3+(n=16 加), 5} 共 ~40 个 run 收紧 ts3 CI(从 1.46→预期 ~0.5) + 量化 TLS 撞车率随横流密度的变化曲线",
           "detail": "后台驱动 bm1pegdb1 (sweep_ts.sh)：ts3 extra 16 个 run 合到 n=24；ts2/ts5 各 n=12；最后出 ts1/ts2/ts3/ts5 对比表。预计 70-90min wall time（重交通慢）。完成后定性回答『TLS 撞车主因是横流密度 还是 IDM 让行能力』——曲线陡→横流主因，平→IDM 是天花板。"
+        },
+        {
+          "title": "autoware-cosim 等你跑通烟测后决定要不要开 PR / 合到集成分支",
+          "detail": "Option A 范围(无 nade_with_av、无 adversity/CNDE 改动)能否在你的 Autoware 链路上跑通,要看你这边在主 checkout 上的测试结论。如确需 nade_with_av 的 AV warmup/external-control 才能跑,再讨论是否把它前移到 cosim 分支(对应 Option B)。两个 PR URL 都已就绪。"
         }
       ],
       "next_steps": [
         {
           "title": "若 ts3 n=24 给出 CV<0.5 的稳定 TLS rate（含 ~10+ TLS 撞车）→ 那个数就是 IDM AV 在该场景下『被 T-bone』的可信估计",
           "detail": "结合 leader 1.07e-3 + TLS ~5e-3 → 总率 ~6e-3 /mile，~3000× 人类 1.8e-6——但要带 'AV 被攻击' caveat，并解释 IDM 停红灯的完美停车模式 + 路口让行不足以挡所有 TLS 的事实。"
+        },
+        {
+          "title": "下一个分支:cnde-merge(从 cnde-yilin 拆 CNDE 相关子集,推 origin + upstream)",
+          "detail": "范围预计:`scripts/run_experiment_cnde.py`、`run_cnde_long_term_test.py`、`run_parallel_cnde_test.py`、`analyze_nde_timing.py`、`analysistools/plot_trajectory_deviation_with_map.py`、`visualize_trajectory_mismatch.py`、CNDE 环境(`envs/nnde.py` 等)、`ann_arbor_cnde_autoware.yaml`,**继续不带 packages/cnde**(那 363 个 ~40MB 二进制 已确定不进云端)。"
+        },
+        {
+          "title": "下一个分支:adversity-merge(从 cnde-yilin 拆 adversity 相关子集,推 origin + upstream)",
+          "detail": "范围预计:`packages/.../adversity/*`(NDE adversity 类、AV-targeting 滤镜、urban_construction_zone 重写)、`nade_with_av.py` 大头(+853 行 AV+adversity 集成)、10 个 `configs/simulation/520toRapp_adversities/*.yaml`、`run_adversity_loop_test.py`、`run_dynamic_adversity_loop.py`、`validate_adversities.py`、`compute_accident_summary.py`、`inc143_batch.sh`,以及 roundabout 分类、stalled_object/construction 改动。"
         }
       ]
     }
