@@ -746,36 +746,7 @@
         {
           "title": "核对 TeraSim ISUZU 分支当前 accident-rate 算法，并确认 monitor.json 的 weight 就是论文 importance-sampling likelihood ratio",
           "detail": "梳理两套并存的 accident-rate 范式。新路径：run_experiment_cnde.py 的 _print_run_summary() 每次仿真结束写 accident_summary.{json,txt}，含 conditional rate（per class = av_crashes_attributed/fires，在 probability 变化下不变，描述该 adversity 类的本质危险度）+ absolute rate（per run = av_collisions/sim_duration_s 或 /km，随 probability 线性缩放）；归因用 5 秒 lookback（每次 AV 碰撞往回找对方 BV 最近一次 *_fire 事件，归到对应 class，未命中进 no_attribution，实测 <5%）；触发改成每个 adversity class 独立的 Bernoulli probability 门控（在 trigger() 里抽样），替代已废弃的全局 adversity_sampling_probability。建立这套算法的核心 commit 是 3f87efe / c761ce2 / 49da60f / e282b4a / 54e537d。老路径：nade.py 的 on_stop() 把 self.record 写成 monitor.json，顶层 weight 字段 = 整轮 importance-sampling 累积权重，由 nade.py:683-700 的 weight *= ndd_adversarial_prob/IS_prob（或 normal 分支 ndd_normal_prob/(1-IS_prob)）逐步乘出，正是论文 Eq. W_q(x)=Π P(u|s)/q(u|s) 的 likelihood ratio；论文 unbiased 估计 P(A)=E[1{crash}·W_q] 用的就是这条路径。结论：两套范式不同——montior.json 是 IS 加权的无偏估计（对应论文），accident_summary 是观测频率（有偏，反映配置的 probability 混合）。"
-        }
-      ],
-      "in_progress": [
-        {
-          "title": "cnde-yilin-rebased 待 review + commit + 采纳",
-          "detail": "净差以暂存（未提交）形式留在 cnde-yilin-rebased（基于 main），按 no-auto-commit 习惯不自动提交代码。待 review 7 处冲突解决（尤其 stalled_object.py 丢弃 main 车型 helper 那项）后 commit，再 git branch -f cnde-yilin 指过来并 force-push 覆盖 origin/cnde-yilin。注意备份分支 cnde-yilin-backup-20260526 与现有 origin/cnde-yilin 历史里仍含旧 cnde blob，只有 force-push 干净分支后,远程走向分支才不含 cnde。对应 INC-242。"
-        }
-      ],
-      "next_steps": [
-        {
-          "title": "Review cnde-yilin-rebased 的 7 处冲突解决",
-          "detail": "重点确认 stalled_object.py 丢弃 main 的 create_truck_type/emergency_police/pedestrian 是否可接受。"
         },
-        {
-          "title": "满意后 commit 并 force-push 覆盖 origin/cnde-yilin",
-          "detail": "git branch -f cnde-yilin cnde-yilin-rebased 后强推；远程走向分支自此不含 packages/cnde。"
-        },
-        {
-          "title": "INC-242：决定 cnde / hht-dev 分支去留 + 身份统一",
-          "detail": "hht-dev 仅在 upstream；origin 上是 cnde-yilin + main。结合这次清理一并定分支策略。"
-        },
-        {
-          "title": "确认长 NCRC accrate run 不再生成 monitor.json 的影响：复现论文 unbiased IS 估计需 clean on_stop 或增量落盘 weight",
-          "detail": "发现最近的 accrate runs（accrate_nde_p0_1、accrate_cnde_p0_3_retry、seed1_inc143_verify、roundabout_short_gui）都没有 monitor.json，尽管 yaml 里 log_flag:true 且 NADEWithAV 仍在累加 importance_sampling_weight。原因是 monitor.json 只在 NADE.on_stop() 里落盘，而这些 138-edge 长路线大概率被强制终止/超时退出，没走到 clean on_stop（对照 ncrc_baseline_full 正常跑完则有 monitor.json，weight=1.0）。隐患：若 ISUZU accident-rate 复现要用论文的 weight×crash 无偏估计，现在拿不到 likelihood ratio，等于丢了 IS 权重，只能退回 accident_summary 的有偏 observed rate。下一步要么保证仿真 clean exit，要么把 weight 改成增量落盘（每步 flush 到磁盘），避免长 run 异常退出丢失 monitor.json。"
-        }
-      ]
-    },
-    {
-      "date": "2026-05-29",
-      "completed": [
         {
           "title": "推翻早先『IDM 路口 T-bone 无敌』的判断：加 TERASIM_TRAFFIC_SCALE env 旋钮，用 traffic_scale=3 测试发现 TLS 真的能撞 AV（2/31 commits = 6.5% 转化率，vs traffic_scale=1 时 0/62）",
           "detail": "之前在 main canonical NADE 跑下看到 TLS 大量触发(62 次)但 0 撞车，我下结论是『SUMO IDM 路口主动让行 → T-bone 几乎不可能』。haotian 怀疑可能是横流不足而非 IDM 本质。验证方法：场景 ncrc_combined_adversity.yaml 用 aa_with_types.rou.xml（自然 Ann Arbor 流量）+ roundabout_traffic.add.xml（只给环岛加横流），信号路口没有专门加横流。给并行脚本加 TERASIM_TRAFFIC_SCALE 旋钮（注入 environment.parameters.traffic_scale），test scale=3 → TLS 提交 31 次（per-run 频率类似但绝对数因 n=8 较少）、AV 撞车 2 次中归因到 TLS 的 2 次 → IDM 让行只能挡掉 ~93%，剩下 ~7% 是无法躲的（多车同时冲突、最后一刻闯入等）。还揭示一个有意思的点：TLS 因为自然率 p 高(1e-2)、q 被 5% cap 截断 → 每次 TLS 撞车权重 = p/q = 0.2 远大于 leader 的 ~3e-3 → 即便 TLS 撞车数少，加权后 rate 贡献(5.4e-3)反而超过 leader(1.1e-3) → TLS 在加密横流下是 rate 主导项。"
@@ -795,6 +766,10 @@
       ],
       "in_progress": [
         {
+          "title": "cnde-yilin-rebased 待 review + commit + 采纳",
+          "detail": "净差以暂存（未提交）形式留在 cnde-yilin-rebased（基于 main），按 no-auto-commit 习惯不自动提交代码。待 review 7 处冲突解决（尤其 stalled_object.py 丢弃 main 车型 helper 那项）后 commit，再 git branch -f cnde-yilin 指过来并 force-push 覆盖 origin/cnde-yilin。注意备份分支 cnde-yilin-backup-20260526 与现有 origin/cnde-yilin 历史里仍含旧 cnde blob，只有 force-push 干净分支后,远程走向分支才不含 cnde。对应 INC-242。"
+        },
+        {
           "title": "扫 traffic_scale ∈ {2, 3+(n=16 加), 5} 共 ~40 个 run 收紧 ts3 CI(从 1.46→预期 ~0.5) + 量化 TLS 撞车率随横流密度的变化曲线",
           "detail": "后台驱动 bm1pegdb1 (sweep_ts.sh)：ts3 extra 16 个 run 合到 n=24；ts2/ts5 各 n=12；最后出 ts1/ts2/ts3/ts5 对比表。预计 70-90min wall time（重交通慢）。完成后定性回答『TLS 撞车主因是横流密度 还是 IDM 让行能力』——曲线陡→横流主因，平→IDM 是天花板。"
         },
@@ -804,6 +779,22 @@
         }
       ],
       "next_steps": [
+        {
+          "title": "Review cnde-yilin-rebased 的 7 处冲突解决",
+          "detail": "重点确认 stalled_object.py 丢弃 main 的 create_truck_type/emergency_police/pedestrian 是否可接受。"
+        },
+        {
+          "title": "满意后 commit 并 force-push 覆盖 origin/cnde-yilin",
+          "detail": "git branch -f cnde-yilin cnde-yilin-rebased 后强推；远程走向分支自此不含 packages/cnde。"
+        },
+        {
+          "title": "INC-242：决定 cnde / hht-dev 分支去留 + 身份统一",
+          "detail": "hht-dev 仅在 upstream；origin 上是 cnde-yilin + main。结合这次清理一并定分支策略。"
+        },
+        {
+          "title": "确认长 NCRC accrate run 不再生成 monitor.json 的影响：复现论文 unbiased IS 估计需 clean on_stop 或增量落盘 weight",
+          "detail": "发现最近的 accrate runs（accrate_nde_p0_1、accrate_cnde_p0_3_retry、seed1_inc143_verify、roundabout_short_gui）都没有 monitor.json，尽管 yaml 里 log_flag:true 且 NADEWithAV 仍在累加 importance_sampling_weight。原因是 monitor.json 只在 NADE.on_stop() 里落盘，而这些 138-edge 长路线大概率被强制终止/超时退出，没走到 clean on_stop（对照 ncrc_baseline_full 正常跑完则有 monitor.json，weight=1.0）。隐患：若 ISUZU accident-rate 复现要用论文的 weight×crash 无偏估计，现在拿不到 likelihood ratio，等于丢了 IS 权重，只能退回 accident_summary 的有偏 observed rate。下一步要么保证仿真 clean exit，要么把 weight 改成增量落盘（每步 flush 到磁盘），避免长 run 异常退出丢失 monitor.json。"
+        },
         {
           "title": "若 ts3 n=24 给出 CV<0.5 的稳定 TLS rate（含 ~10+ TLS 撞车）→ 那个数就是 IDM AV 在该场景下『被 T-bone』的可信估计",
           "detail": "结合 leader 1.07e-3 + TLS ~5e-3 → 总率 ~6e-3 /mile，~3000× 人类 1.8e-6——但要带 'AV 被攻击' caveat，并解释 IDM 停红灯的完美停车模式 + 路口让行不足以挡所有 TLS 的事实。"
