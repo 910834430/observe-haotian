@@ -750,12 +750,20 @@
         {
           "title": "厘清 p 的语义和『3 因子分解』：p 是『每 tick 机动率』非『每 tick 撞车率』；NADE/IS 框架天然实现 crash = 几何机会 × 触发率 × P(撞|机动)；5.7 标定因子 = 1/P(撞|机动, 人类驾驶)",
           "detail": "用户/同事提出『crash = potential/normal × corner_case/potential × crash/corner_case』分解 → 完美对应 TeraSim 现有的『maneuver_challenge 几何门控 × IS 抽样(p/q) × 仿真物理涌现』。数字验证（highway rearend）：p=1.85e-8/tick × 555 tick/mile × 1/5.7 = 1.8e-6 crash/mile 正好对上 SHRP2 实测。所以 spec 文档的 `3.25e-9 × 5.7 = 1.85e-8` 不是魔法——5.7 因子就是『1/P(crash|机动, 人类)』，把『机动率』翻译成『人类驾驶下的撞车率』。这个理解明确了：IS 测出的 AV 撞车率 = 第三因子在 AV 下的值 × 真实人类条件的前两个因子；AV-vs-人类对比的本质就是『第三因子（机动→撞车的避撞条件率）的 AV/人类比值』。已记入回答。"
+        },
+        {
+          "title": "推翻早先『IDM 路口 T-bone 无敌』的判断：加 TERASIM_TRAFFIC_SCALE env 旋钮，用 traffic_scale=3 测试发现 TLS 真的能撞 AV（2/31 commits = 6.5% 转化率，vs traffic_scale=1 时 0/62）",
+          "detail": "之前在 main canonical NADE 跑下看到 TLS 大量触发(62 次)但 0 撞车，我下结论是『SUMO IDM 路口主动让行 → T-bone 几乎不可能』。haotian 怀疑可能是横流不足而非 IDM 本质。验证方法：场景 ncrc_combined_adversity.yaml 用 aa_with_types.rou.xml（自然 Ann Arbor 流量）+ roundabout_traffic.add.xml（只给环岛加横流），信号路口没有专门加横流。给并行脚本加 TERASIM_TRAFFIC_SCALE 旋钮（注入 environment.parameters.traffic_scale），test scale=3 → TLS 提交 31 次（per-run 频率类似但绝对数因 n=8 较少）、AV 撞车 2 次中归因到 TLS 的 2 次 → IDM 让行只能挡掉 ~93%，剩下 ~7% 是无法躲的（多车同时冲突、最后一刻闯入等）。还揭示一个有意思的点：TLS 因为自然率 p 高(1e-2)、q 被 5% cap 截断 → 每次 TLS 撞车权重 = p/q = 0.2 远大于 leader 的 ~3e-3 → 即便 TLS 撞车数少，加权后 rate 贡献(5.4e-3)反而超过 leader(1.1e-3) → TLS 在加密横流下是 rate 主导项。"
         }
       ],
       "in_progress": [
         {
           "title": "正式选定 accident-rate 算法：main canonical NADE adversity + is-mode + per-event 归因 → 稳定 1.82e-3/mile（CV 0.37），可信",
           "detail": "替换 main 版 + per-event 归因后估计量稳定、各类对抗都在真实自然率下触发、撞车归因 commit 级可靠。剩下要注意的是：1.82e-3 主要是『AV 被追尾』率（leader 主导）非『AV 主动撞』率（follower 几何稀有几乎不触发），跟人类主动撞击率 1.8e-6 比要带这个 caveat。"
+        },
+        {
+          "title": "扫 traffic_scale ∈ {2, 3+(n=16 加), 5} 共 ~40 个 run 收紧 ts3 CI(从 1.46→预期 ~0.5) + 量化 TLS 撞车率随横流密度的变化曲线",
+          "detail": "后台驱动 bm1pegdb1 (sweep_ts.sh)：ts3 extra 16 个 run 合到 n=24；ts2/ts5 各 n=12；最后出 ts1/ts2/ts3/ts5 对比表。预计 70-90min wall time（重交通慢）。完成后定性回答『TLS 撞车主因是横流密度 还是 IDM 让行能力』——曲线陡→横流主因，平→IDM 是天花板。"
         }
       ],
       "next_steps": [
@@ -770,6 +778,10 @@
         {
           "title": "写文档 §17 记录 main 替换 + IDM 脆弱性谱（leader 77% / cut-in 5% / TLS 0% 转化率）的最终发现",
           "detail": "今天最值得固化的实证。"
+        },
+        {
+          "title": "若 ts3 n=24 给出 CV<0.5 的稳定 TLS rate（含 ~10+ TLS 撞车）→ 那个数就是 IDM AV 在该场景下『被 T-bone』的可信估计",
+          "detail": "结合 leader 1.07e-3 + TLS ~5e-3 → 总率 ~6e-3 /mile，~3000× 人类 1.8e-6——但要带 'AV 被攻击' caveat，并解释 IDM 停红灯的完美停车模式 + 路口让行不足以挡所有 TLS 的事实。"
         }
       ]
     }
