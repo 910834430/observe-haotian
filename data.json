@@ -835,6 +835,18 @@
         {
           "title": "Update Notion weekly report（appended to May 25-31 page, 因为本周一也在同一活动中）",
           "detail": "本周 Monday=2026-06-01 但用户希望接着 May 25-31 那页继续 append 而非新建一页。先误建 'Weekly Report Jun. 1- Jun. 7' 然后用 notion-update-page replace_content + 重命名标记为 '[DUPLICATE - PLEASE DELETE]'，待手动 trash。主页 'Weekly Report May 25 - May 31' 用 update_content 三个 search/replace 操作 append：(a) This week 加 'Agentic AV Testing (INC-241) — IDM AV Crash Rate Assessment & Batch Scaling (Jun 1)' 块；(b) Next week 加 4 项后续 (n=144 收敛分析、p_TLS 校准审查、cap 提升试验、constants.py 文档化)；(c) Notes 加 3 条非显性发现 (cap saturation 是方差源头、11 类 p 校准链不透明、环岛过密是 sim setup 伪影)。"
+        },
+        {
+          "title": "写了 traci 驱动的 SUMO replay 工具——之前以为 sumo-gui 有 --fcd-input，发现是错的，转用 moveToXY 重做",
+          "detail": "客户问能不能看 simulation 回放。第一反应是写 FCD 转换器（heading_tracker.jsonl → FCD XML），写完才发现 sumo-gui 没有 --fcd-input 选项（只有 --fcd-output）——一个错误假设浪费了 10 分钟。改用 traci 子进程模式：起 sumo-gui，加 dummy route 让 vehicle.add 能工作，每 tick 用 moveToXY(keepRoute=2) 把车摆到 heading_tracker.jsonl 记录的 (x, y, angle) 位置，setSpeedMode(0)+setLaneChangeMode(0) 关掉 SUMO 物理避免轨迹被 IDM 改写。脚本 scripts/replay_in_sumo_gui.py（~100 行）。在 ub4_hunt_r29_s34021（NCRC 7109 ticks，sim_t 15→725s）上跑通，sumo-gui 窗口实际打开在 DISPLAY=:1，xdotool 确认到 window ID。回放限制：heading_tracker 只记 AV 100m 半径内的车，远处 BV 不会出现——客户能看到 AV + 周围 BV 行为，但看不到整张图。"
+        },
+        {
+          "title": "把 visual replay 包成 sim-replay skill——客户说 'replay the last run' 就自动跑，仿 libsumo-rebuild 格式",
+          "detail": "写了 .claude/skills/sim-replay/SKILL.md（~250 行）。description 字段设了一堆触发短语（'replay me the most recent sumo replay'、'show me the last run'、'play back that simulation'、'I want to see the AV trajectory'），让 Claude 主会话基于自然语言自动调起来。流程 5 步：(1) find output -name heading_tracker.jsonl -printf '%T@ %p' | sort -nr | head 自动挑最新 run dir；(2) 从 run_metadata.json 读 input_files.sumo_net 路径（fallback NCRC 默认 aa_fixed_enhanced.net.xml）；(3) DISPLAY=:1 xdpyinfo 验证 X server 可达；(4) nohup 后台启动 scripts/replay_in_sumo_gui.py；(5) xdotool search --name SUMO 验证窗口起来。带 troubleshooting 表（之前踩的 6 个坑都写进去：sumo-gui not found、fcd-input 不存在、Connection closed by SUMO 等）和无 X server 时的 matplotlib MP4 备用方案。"
+        },
+        {
+          "title": "把 sim-replay skill 推到 SaferDrive-AI/TeraSim 一个干净分支上等开 PR——发现 .claude/ 是 gitignore 的需要 -f",
+          "detail": "主 repo cnde-yilin 分支有大量 WIP 不能直接切。新建 worktree .claude/worktrees/sim-replay-skill 在分支 add-sim-replay-skill 上，基于 origin/main (e5fc9e3) 起。发现 .claude/ 在 .gitignore 第 29 行——既有的 libsumo-rebuild skill 居然也没被 git 跟踪（只是文件系统里有），第一次给 skill 开 PR。用 git add -f 强制加 SKILL.md，scripts/*.py 正常加。本来准备 3 文件提交（含早期废弃的 heading_tracker_to_fcd.py），客户敏锐地问 'only one file?'，复查后确认 FCD 那个脚本被 sumo-gui --fcd-input 路径废弃没人用，最终 2 文件干净提交：SKILL.md + replay_in_sumo_gui.py。Commit 3933965，push to upstream (SaferDrive-AI/TeraSim) 分支 add-sim-replay-skill。PR URL: https://github.com/SaferDrive-AI/TeraSim/pull/new/add-sim-replay-skill。"
         }
       ],
       "in_progress": [
