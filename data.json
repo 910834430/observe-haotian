@@ -2,7 +2,7 @@
   "name": "Haotian",
   "role": "Simulation Engineer",
   "company": "Inchor Mobility",
-  "last_updated": "2026-05-29",
+  "last_updated": "2026-06-01",
   "days": [
     {
       "date": "2026-05-07",
@@ -806,6 +806,59 @@
         {
           "title": "下一个分支:adversity-merge(从 cnde-yilin 拆 adversity 相关子集,推 origin + upstream)",
           "detail": "范围预计:`packages/.../adversity/*`(NDE adversity 类、AV-targeting 滤镜、urban_construction_zone 重写)、`nade_with_av.py` 大头(+853 行 AV+adversity 集成)、10 个 `configs/simulation/520toRapp_adversities/*.yaml`、`run_adversity_loop_test.py`、`run_dynamic_adversity_loop.py`、`validate_adversities.py`、`compute_accident_summary.py`、`inc143_batch.sh`,以及 roundabout 分类、stalled_object/construction 改动。"
+        }
+      ]
+    },
+    {
+      "date": "2026-06-01",
+      "completed": [
+        {
+          "title": "审计 TeraSim per-event importance-sampling crash-rate estimator 的实现，确认与论文 IS 框架数学一致",
+          "detail": "深入审计 packages/terasim-nde-nade/terasim_nde_nade/envs/nade.py:get_IS_prob (line 712-762) 和 utils/nade/avoidance.py:modify_nde_cmd_veh_using_avoidability (line 437-471) 两处核心实现。验证了 (a) W = ndd_prob/IS_prob 的 per-event 公式无偏；(b) unavoidable 类应用 ndd × 3e-4 deflation + IS_magnitude × 40 multiplier 数学正确；(c) IS_MAGNITUDE_HIGHWAY/INTERSECTION/ROUNDABOUT env vars 被正确读取并 override IS_MAGNITUDE_DEFAULT=20；(d) max_importance_sampling_prob = 0.05 cap 在 nade.py:81 硬编码。关键发现：scripts/aggregate_perevent.py 的 W=∏(ndd/IS) 公式是论文 importance sampling 的等价改写——E_q[1{crash}×W] = E_p[1{crash}]——只用致因 commit 的 p/q（3s lookback），不累乘 (1-p)/(1-q) 避免 weight 数值崩溃。"
+        },
+        {
+          "title": "完成 n=144 episode 大规模 batch simulation，crash rate 在 ~525 ppm 收敛，CV=6.87 受 cap saturation 主导",
+          "detail": "启动 bg sequential runner (`bnhktynew`)，11 batches × 12 parallel × mag=200，从 seed 27000-27131 共 132 个新 episode + existing 12 = n=144 total。实际 wall 2.5h（比预估 4.6h 快），从 03:15 到 05:50 完成。收敛轨迹：n=12 → 2140 ppm；n=24 → 1060；n=48 → 534；n=144 → 525.63 ppm。最终拆解：1168.6 miles, 58 AV-collisions, 49 attributed (3 avoidable + 46 unavoidable), 9 unattributed。Unavoidable-only rate = 4.92 ppm（接近人类 SHRP2 1.8 / Michigan 3.0 基线，校准良好）。Avoidable 类 W=0.2028 per crash 因 p_TLS=0.01014 撞顶 cap=0.05 锁死 —— 单事件主导 99.8% 总权重 → CV 反而随 n 上升（4.77 → 6.78 → 6.87）。"
+        },
+        {
+          "title": "发现 IDM AV 在 lane 87339791#0_2 处可复现的 avoidable-TLS 失败几何 (2/3 avoidable crashes 在同 lane)",
+          "detail": "n=144 数据里 3 个 avoidable 撞车的位置审查：(1) run01_seed27072 t=349.3s lane 87339791#0_2 pos=10.64 rear-end；(2) run09_seed25008 t=356.5s lane 87339791#0_2 pos=12.92 rear-end；(3) run03_seed27110 t=70.8s lane 4411907471#0_1 pos=33.60 side-collision。**2/3 集中在同 lane 同位置**，发生时间也接近（~350s），明确是 IDM 跟车模型在某特定 TLS 几何下的可复现弱点——avoidance.py 判定 'AV 本可刹住' 但 IDM smooth braking (max ~3 m/s²) 来不及响应 emergency cross-traffic。这不是 outlier 也不是 sim bug，是真实 IDM behavioral 缺陷率 ~1 per 456 mile。"
+        },
+        {
+          "title": "生成完整 IDM AV crash rate assessment report (323 行)，写入 TeraSim/docs/，含 final result 置顶",
+          "detail": "写 docs/idm_av_crash_rate_assessment_20260601.md (323 行)，§0 FINAL RESULT 置顶 (rate=525.63 ppm 拆分 + 收敛表 + headline finding lane 87339791#0_2)，§1 how crash rate is calculated (IS math + p 来源 constants.py 11 类校准 + q 公式 + avoidable/unavoidable 两类 W profile)，§2 experiment setup，§3 每个 attributed/unattributed 撞车详细位置时间 BV，§4 5 条 key findings，§5 estimator variance 分析 (CV 随 n 上升的 cap 解释)，§6 6 条 methodology limitations，§7 priority-tagged recommendations。关键 caveat：p_TLS = 0.01014/tick 比 FHWA 国家 TLS-running rate ~5e-8/mile 高 100-1000×，需要 spec mapping PDF 出处确认是否过高校准。"
+        },
+        {
+          "title": "切换到 paper-style stop-at-crash per-episode IS estimator：改 yaml + 外科性 patch nade_with_av.py",
+          "detail": "用户要求严格走 paper per-episode IS 方法。改 configs/simulation/ncrc_combined_adversity.yaml：continue_on_av_collision: true → false（与 av_debug_control=true 联动让 sim 在 AV 撞车时 return False 终止）。但第一次跑发现 nade_with_av.py 的 'AV_left' 分支也会被 return False 触发（line 1602-1622），导致 BV-BV 堵车 + AV teleport 也错误地终止 sim。Surgical patch line 1620-1622：把 'AV left the simulation, stop the simulation. return False' 改成 'not treating as AV-crash, continuing.' 只 logger.warning 不 return —— 这样只有真实 AV 碰撞才停。同时给 series runner 加 30 min worker timeout 防 SUMO 单 worker segfault hang。已启动 bquvzuwif (12 序列 episodes, seed 28000-28011)。"
+        },
+        {
+          "title": "Update Notion weekly report（appended to May 25-31 page, 因为本周一也在同一活动中）",
+          "detail": "本周 Monday=2026-06-01 但用户希望接着 May 25-31 那页继续 append 而非新建一页。先误建 'Weekly Report Jun. 1- Jun. 7' 然后用 notion-update-page replace_content + 重命名标记为 '[DUPLICATE - PLEASE DELETE]'，待手动 trash。主页 'Weekly Report May 25 - May 31' 用 update_content 三个 search/replace 操作 append：(a) This week 加 'Agentic AV Testing (INC-241) — IDM AV Crash Rate Assessment & Batch Scaling (Jun 1)' 块；(b) Next week 加 4 项后续 (n=144 收敛分析、p_TLS 校准审查、cap 提升试验、constants.py 文档化)；(c) Notes 加 3 条非显性发现 (cap saturation 是方差源头、11 类 p 校准链不透明、环岛过密是 sim setup 伪影)。"
+        }
+      ],
+      "in_progress": [
+        {
+          "title": "Series-12 stop-at-AV-crash bg run (bquvzuwif): 12 sequential episodes 测试 paper-style per-episode IS estimator",
+          "detail": "Background 串行 12 个 single-episode runs (mag=200, seeds 28000-28011) 用以验证 paper 严格 IS 方法在 stop-at-crash 模式下是否能用更少的 episode 给出合理 rate 估计。等运行完后对比 n=144 per-event 估计 (525 ppm) 是否一致——如果接近，说明 per-event 跟 per-episode framing 数学等价；如果差很大，说明 (1-p)/(1-q) 因子在 paper 公式里不能忽略。"
+        }
+      ],
+      "next_steps": [
+        {
+          "title": "等 series-12 v2 跑完做 per-episode IS rate 验证, 对比 n=144 per-event 525 ppm",
+          "detail": "Series-12 v2 (bquvzuwif) 跑完后聚合 sum_W / total_miles 看跟 525 ppm 是否同量级。如果是 → per-event 跟 per-episode framing 数学等价确认；如果差很大 → 需要加 (1-p)/(1-q) 因子或重做 IS 框架。"
+        },
+        {
+          "title": "如果 cap saturation 是变差源头：把 max_importance_sampling_prob 从 0.05 提到 0.5 后重跑 n=144",
+          "detail": "改 packages/terasim-nde-nade/terasim_nde_nade/envs/nade.py:81 的 max_importance_sampling_prob = 5e-2 → 0.5。预期效果：avoidable 类 W 从 0.2028 → 0.02028 (10×), 但同时 expected commits 增 10×, 总 rate 应保持 ~525 ppm，CV 应降到 ~2。如此可验证 'cap saturation 是 variance 的根源, IS 估计本身无偏' 的诊断。"
+        },
+        {
+          "title": "调查 p_TLS = 0.01014/tick 校准是否过高（vs FHWA national rate ~5e-8/mile 高 100-1000×）",
+          "detail": "TeraSim constants.py 的 intersection_tfl_prob = 0.058 × 18 个 multiplier = 0.01014 per 0.1s tick。一阶估算：per-mile crash rate ≈ p × P(crash|maneuver, in conflict) ≈ 0.01 × 5e-3 = 5e-5/mi vs FHWA 真实 ~5.16e-8/mile (165k crash/3.2e12 mi) → 高 ~1000×。需要查 spec mapping PDF 看 18 个 multiplier 的出处和 ISUZU ODD 是否需要 re-calibration。"
+        },
+        {
+          "title": "给 constants.py 的 11 类 p 校准 multiplier 链补 docstring 或 derivation script",
+          "detail": "现状：constants.py 每类 p = base × 18-22 个数字，无 inline 文档，出处只在 spec mapping PDF。未来 re-calibration 或客户 (ISUZU) 改 ODD 时无法追溯。需要：(a) 为每个 multiplier 加 inline comment 说明来源；(b) 或写 derivation script 把 multiplier 跟 spec PDF 表对齐；(c) 或迁移到带 reference 的 yaml 配置。"
         }
       ]
     }
