@@ -873,10 +873,6 @@
         {
           "title": "切换到 paper-style stop-at-crash per-episode IS estimator：改 yaml + 外科性 patch nade_with_av.py",
           "detail": "用户要求严格走 paper per-episode IS 方法。改 configs/simulation/ncrc_combined_adversity.yaml：continue_on_av_collision: true → false（与 av_debug_control=true 联动让 sim 在 AV 撞车时 return False 终止）。但第一次跑发现 nade_with_av.py 的 'AV_left' 分支也会被 return False 触发（line 1602-1622），导致 BV-BV 堵车 + AV teleport 也错误地终止 sim。Surgical patch line 1620-1622：把 'AV left the simulation, stop the simulation. return False' 改成 'not treating as AV-crash, continuing.' 只 logger.warning 不 return —— 这样只有真实 AV 碰撞才停。同时给 series runner 加 30 min worker timeout 防 SUMO 单 worker segfault hang。已启动 bquvzuwif (12 序列 episodes, seed 28000-28011)。"
-        },
-        {
-          "title": "Update Notion weekly report（append 到 May 25-31 page 而非新建 Jun 1-7 page）",
-          "detail": "本周 Monday=2026-06-01 但用户希望接着 May 25-31 那页继续 append 而非新建一页。先误建 'Weekly Report Jun. 1- Jun. 7' 然后用 notion-update-page replace_content + 重命名标记为 '[DUPLICATE - PLEASE DELETE]'，待手动 trash。主页 'Weekly Report May 25 - May 31' 用 update_content 三个 search/replace 操作 append：(a) This week 加 'Agentic AV Testing (INC-241) — IDM AV Crash Rate Assessment & Batch Scaling (Jun 1)' 块；(b) Next week 加 4 项后续 (n=144 收敛分析、p_TLS 校准审查、cap 提升试验、constants.py 文档化)；(c) Notes 加 3 条非显性发现 (cap saturation 是方差源头、11 类 p 校准链不透明、环岛过密是 sim setup 伪影)。"
         }
       ],
       "in_progress": [
