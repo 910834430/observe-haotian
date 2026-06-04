@@ -873,16 +873,16 @@
         {
           "title": "切换到 paper-style stop-at-crash per-episode IS estimator：改 yaml + 外科性 patch nade_with_av.py",
           "detail": "用户要求严格走 paper per-episode IS 方法。改 configs/simulation/ncrc_combined_adversity.yaml：continue_on_av_collision: true → false（与 av_debug_control=true 联动让 sim 在 AV 撞车时 return False 终止）。但第一次跑发现 nade_with_av.py 的 'AV_left' 分支也会被 return False 触发（line 1602-1622），导致 BV-BV 堵车 + AV teleport 也错误地终止 sim。Surgical patch line 1620-1622：把 'AV left the simulation, stop the simulation. return False' 改成 'not treating as AV-crash, continuing.' 只 logger.warning 不 return —— 这样只有真实 AV 碰撞才停。同时给 series runner 加 30 min worker timeout 防 SUMO 单 worker segfault hang。已启动 bquvzuwif (12 序列 episodes, seed 28000-28011)。"
+        },
+        {
+          "title": "Audit 测试代码版本——发现 revert 分支 A3 NaN/Inf 没完全删 + 真测试目标重定到 cnde-yilin（带防御版）",
+          "detail": "客户问 'what version of code are you testing right now'。逐项 grep revert 分支：A1 _vehicle_exists_static=0 (完全删)、A2 'CNDE Safety' block=0 (Dylan 的 angle>45°/position-jump skip 全删)、E ghost vehicle filter=0、D cosim.py moveToXY 恢复 ✓。但 A3 grep 出 line 423 还有 `np.isnan/isinf any() return`——commit a10bde3 描述写 'A3 replaced with minimal skip'，不是 'removed'。同时发现 nde_controller.py line 472/574 用 traci.vehicle.moveTo（lane-based）不是 moveToXY——这是 CNDE 基线（cnde-yilin 也是 moveTo），不是 Dylan 防御。UB#1/#2/#3 patches grep 确认在 ~/.terasim/deps/sumo source tree 里。libsumo md5 871ab7aa99b317dcfcb7802ecb06593c (May 28 build, 26.9 MB, FOX symbols 在)。客户决定切到 cnde-yilin（生产代码、带完整 Dylan 防御）测——这是 client 实际部署的版本，证明它 hold up 比证明 revert 安全更重要。新 worktree .claude/worktrees/ub4-hunt-cnde-yilin 基于 cnde-yilin 0a31c7d 起新分支 ub4-hunt-cnde-yilin（cnde-yilin 自己已经 checkout 在主 repo 上，git 不让重复 checkout）。defenses 确认 ON：A1=6, A2=6, E=1。Symlink maps、sed gui_flag→false、Hunter NTH 命名从 ub4_hunt_revert_p* 改 ub4_hunt_cndey_p* 避免数据混。3 parallel 重启 PIDs 659953/660057/660167。Revert 分支的 200+ runs 数据保留在 .claude/worktrees/ub4-hunt-revert/output 以备后比。"
         }
       ],
       "in_progress": [
         {
-          "title": "3 个并行 UB#4 hunter 在 inc-240-revert-dylan-test 上继续跑——目标 200+ runs prove 防御移除安全",
-          "detail": "p0/p1/p2 三个 slot，hunter PIDs 2757559/2757674/2757784，scripts/ub4_hunter.sh {SLOT}。每 run 取随机 seed + ub4_hunt_revert_p{SLOT}_r{N}_s{SEED} output dir。监控：/tmp/ub4_hunter_p{0,1,2}_progress.log（每 run 一行），/tmp/ub4_hunter_p{0,1,2}_crashes.log（只 crash 才有内容）。crash 判定：segfault.log 或 faulthandler_trace.txt 非空，或 rc != 0。停止：kill -9 $(cat /tmp/ub4_hunter_p{0,1,2}.pid) + pkill -9 -f hunter_yaml_p。"
-        },
-        {
-          "title": "Series-12 stop-at-AV-crash bg run (bquvzuwif): 12 sequential episodes 测试 paper-style per-episode IS estimator",
-          "detail": "Background 串行 12 个 single-episode runs (mag=200, seeds 28000-28011) 用以验证 paper 严格 IS 方法在 stop-at-crash 模式下是否能用更少的 episode 给出合理 rate 估计。等运行完后对比 n=144 per-event 估计 (525 ppm) 是否一致——如果接近，说明 per-event 跟 per-episode framing 数学等价；如果差很大，说明 (1-p)/(1-q) 因子在 paper 公式里不能忽略。"
+          "title": "3 并行 UB#4 hunter 现切到 cnde-yilin（完整 Dylan 防御）——证明生产代码在 600+ runs 仍 hold up",
+          "detail": "Branch ub4-hunt-cnde-yilin 基于 cnde-yilin 0a31c7d。Worktree .claude/worktrees/ub4-hunt-cnde-yilin。Defenses A1+A2+A3+D+E 全部启用。监控 /tmp/ub4_hunter_p{0,1,2}_progress.log + crashes.log。Output 路径 .claude/worktrees/ub4-hunt-cnde-yilin/output/ncrc_combined_adversity/raw_data/ub4_hunt_cndey_p*。停止: kill -9 $(cat /tmp/ub4_hunter_p{0,1,2}.pid) + pkill -9 -f hunter_yaml_p。Hunter PIDs 659953/660057/660167。"
         }
       ],
       "next_steps": [
