@@ -813,6 +813,26 @@
       "date": "2026-06-01",
       "completed": [
         {
+          "title": "审计 TeraSim per-event importance-sampling crash-rate estimator 的实现，确认与论文 IS 框架数学一致",
+          "detail": "深入审计 packages/terasim-nde-nade/terasim_nde_nade/envs/nade.py:get_IS_prob (line 712-762) 和 utils/nade/avoidance.py:modify_nde_cmd_veh_using_avoidability (line 437-471) 两处核心实现。验证了 (a) W = ndd_prob/IS_prob 的 per-event 公式无偏；(b) unavoidable 类应用 ndd × 3e-4 deflation + IS_magnitude × 40 multiplier 数学正确；(c) IS_MAGNITUDE_HIGHWAY/INTERSECTION/ROUNDABOUT env vars 被正确读取并 override IS_MAGNITUDE_DEFAULT=20；(d) max_importance_sampling_prob = 0.05 cap 在 nade.py:81 硬编码。关键发现：scripts/aggregate_perevent.py 的 W=∏(ndd/IS) 公式是论文 importance sampling 的等价改写——E_q[1{crash}×W] = E_p[1{crash}]——只用致因 commit 的 p/q（3s lookback），不累乘 (1-p)/(1-q) 避免 weight 数值崩溃。"
+        },
+        {
+          "title": "完成 n=144 episode 大规模 batch simulation，crash rate 在 ~525 ppm 收敛，CV=6.87 受 cap saturation 主导",
+          "detail": "启动 bg sequential runner (`bnhktynew`)，11 batches × 12 parallel × mag=200，从 seed 27000-27131 共 132 个新 episode + existing 12 = n=144 total。实际 wall 2.5h（比预估 4.6h 快），从 03:15 到 05:50 完成。收敛轨迹：n=12 → 2140 ppm；n=24 → 1060；n=48 → 534；n=144 → 525.63 ppm。最终拆解：1168.6 miles, 58 AV-collisions, 49 attributed (3 avoidable + 46 unavoidable), 9 unattributed。Unavoidable-only rate = 4.92 ppm（接近人类 SHRP2 1.8 / Michigan 3.0 基线，校准良好）。Avoidable 类 W=0.2028 per crash 因 p_TLS=0.01014 撞顶 cap=0.05 锁死 —— 单事件主导 99.8% 总权重 → CV 反而随 n 上升（4.77 → 6.78 → 6.87）。"
+        },
+        {
+          "title": "生成完整 IDM AV crash rate assessment report (323 行)，写入 TeraSim/docs/，含 final result 置顶",
+          "detail": "写 docs/idm_av_crash_rate_assessment_20260601.md (323 行)，§0 FINAL RESULT 置顶 (rate=525.63 ppm 拆分 + 收敛表 + headline finding lane 87339791#0_2)，§1 how crash rate is calculated (IS math + p 来源 constants.py 11 类校准 + q 公式 + avoidable/unavoidable 两类 W profile)，§2 experiment setup，§3 每个 attributed/unattributed 撞车详细位置时间 BV，§4 5 条 key findings，§5 estimator variance 分析 (CV 随 n 上升的 cap 解释)，§6 6 条 methodology limitations，§7 priority-tagged recommendations。关键 caveat：p_TLS = 0.01014/tick 比 FHWA 国家 TLS-running rate ~5e-8/mile 高 100-1000×，需要 spec mapping PDF 出处确认是否过高校准。"
+        },
+        {
+          "title": "发现 IDM AV 在 lane 87339791#0_2 处可复现的 avoidable-TLS 失败几何 (2/3 avoidable crashes 在同 lane)",
+          "detail": "n=144 数据里 3 个 avoidable 撞车的位置审查：(1) run01_seed27072 t=349.3s lane 87339791#0_2 pos=10.64 rear-end；(2) run09_seed25008 t=356.5s lane 87339791#0_2 pos=12.92 rear-end；(3) run03_seed27110 t=70.8s lane 4411907471#0_1 pos=33.60 side-collision。**2/3 集中在同 lane 同位置**，发生时间也接近（~350s），明确是 IDM 跟车模型在某特定 TLS 几何下的可复现弱点——avoidance.py 判定 'AV 本可刹住' 但 IDM smooth braking (max ~3 m/s²) 来不及响应 emergency cross-traffic。这不是 outlier 也不是 sim bug，是真实 IDM behavioral 缺陷率 ~1 per 456 mile。"
+        },
+        {
+          "title": "切换到 paper-style stop-at-crash per-episode IS estimator：改 yaml + 外科性 patch nade_with_av.py",
+          "detail": "用户要求严格走 paper per-episode IS 方法。改 configs/simulation/ncrc_combined_adversity.yaml：continue_on_av_collision: true → false（与 av_debug_control=true 联动让 sim 在 AV 撞车时 return False 终止）。但第一次跑发现 nade_with_av.py 的 'AV_left' 分支也会被 return False 触发（line 1602-1622），导致 BV-BV 堵车 + AV teleport 也错误地终止 sim。Surgical patch line 1620-1622：把 'AV left the simulation, stop the simulation. return False' 改成 'not treating as AV-crash, continuing.' 只 logger.warning 不 return —— 这样只有真实 AV 碰撞才停。同时给 series runner 加 30 min worker timeout 防 SUMO 单 worker segfault hang。已启动 bquvzuwif (12 序列 episodes, seed 28000-28011)。"
+        },
+        {
           "title": "写了 traci 驱动的 SUMO replay 工具——之前以为 sumo-gui 有 --fcd-input，发现是错的，转用 moveToXY 重做",
           "detail": "客户问能不能看 simulation 回放。第一反应是写 FCD 转换器（heading_tracker.jsonl → FCD XML），写完才发现 sumo-gui 没有 --fcd-input 选项（只有 --fcd-output）——一个错误假设浪费了 10 分钟。改用 traci 子进程模式：起 sumo-gui，加 dummy route 让 vehicle.add 能工作，每 tick 用 moveToXY(keepRoute=2) 把车摆到 heading_tracker.jsonl 记录的 (x, y, angle) 位置，setSpeedMode(0)+setLaneChangeMode(0) 关掉 SUMO 物理避免轨迹被 IDM 改写。脚本 scripts/replay_in_sumo_gui.py（~100 行）。在 ub4_hunt_r29_s34021（NCRC 7109 ticks，sim_t 15→725s）上跑通，sumo-gui 窗口实际打开在 DISPLAY=:1，xdotool 确认到 window ID。回放限制：heading_tracker 只记 AV 100m 半径内的车，远处 BV 不会出现——客户能看到 AV + 周围 BV 行为，但看不到整张图。"
         },
@@ -838,18 +858,6 @@
         {
           "title": "在 inc-240-revert-dylan-test 上建新 worktree + 写 hunter 脚本——这次真去找 UB#4",
           "detail": "git worktree add .claude/worktrees/ub4-hunt-revert inc-240-revert-dylan-test，HEAD 在 97c7ba6（revert D+E）+ a10bde3（revert A1+A2+A3）。Sanity check：grep _vehicle_exists_static=0、Safety check=1（只剩注释残留）、ghost=0——防御真的 revert 干净。Maps 是 B2 同步不在 git 里，新 worktree 的 examples/maps/ 只有 3LaneHighway/Mcity/town10 三个空 stub 子目录没 ann_arbor_full。rm -rf 后 ln -s $MAIN/examples/maps —— aa_fixed_enhanced.net.xml 和 cnde_map_ann_arbor_full_v6.pkl 通过 symlink 解析到主 repo 的副本。写 ub4_hunter.sh：循环里每 run 用 python -c 把随机 seed + ub4_hunt_revert_rN_sM nth 注入到 /tmp/hunter_yaml_N.yaml，USE_LIBSUMO=1 跑 run_experiment_cnde.py，检 segfault.log/faulthandler_trace.txt/非零 exit 任一就记 crash。单 slot 串行后台启动。"
-        },
-        {
-          "title": "审计 TeraSim per-event importance-sampling crash-rate estimator 的实现，确认与论文 IS 框架数学一致",
-          "detail": "深入审计 packages/terasim-nde-nade/terasim_nde_nade/envs/nade.py:get_IS_prob (line 712-762) 和 utils/nade/avoidance.py:modify_nde_cmd_veh_using_avoidability (line 437-471) 两处核心实现。验证了 (a) W = ndd_prob/IS_prob 的 per-event 公式无偏；(b) unavoidable 类应用 ndd × 3e-4 deflation + IS_magnitude × 40 multiplier 数学正确；(c) IS_MAGNITUDE_HIGHWAY/INTERSECTION/ROUNDABOUT env vars 被正确读取并 override IS_MAGNITUDE_DEFAULT=20；(d) max_importance_sampling_prob = 0.05 cap 在 nade.py:81 硬编码。关键发现：scripts/aggregate_perevent.py 的 W=∏(ndd/IS) 公式是论文 importance sampling 的等价改写——E_q[1{crash}×W] = E_p[1{crash}]——只用致因 commit 的 p/q（3s lookback），不累乘 (1-p)/(1-q) 避免 weight 数值崩溃。"
-        },
-        {
-          "title": "完成 n=144 episode 大规模 batch simulation，crash rate 在 ~525 ppm 收敛，CV=6.87 受 cap saturation 主导",
-          "detail": "启动 bg sequential runner (`bnhktynew`)，11 batches × 12 parallel × mag=200，从 seed 27000-27131 共 132 个新 episode + existing 12 = n=144 total。实际 wall 2.5h（比预估 4.6h 快），从 03:15 到 05:50 完成。收敛轨迹：n=12 → 2140 ppm；n=24 → 1060；n=48 → 534；n=144 → 525.63 ppm。最终拆解：1168.6 miles, 58 AV-collisions, 49 attributed (3 avoidable + 46 unavoidable), 9 unattributed。Unavoidable-only rate = 4.92 ppm（接近人类 SHRP2 1.8 / Michigan 3.0 基线，校准良好）。Avoidable 类 W=0.2028 per crash 因 p_TLS=0.01014 撞顶 cap=0.05 锁死 —— 单事件主导 99.8% 总权重 → CV 反而随 n 上升（4.77 → 6.78 → 6.87）。"
-        },
-        {
-          "title": "生成完整 IDM AV crash rate assessment report (323 行)，写入 TeraSim/docs/，含 final result 置顶",
-          "detail": "写 docs/idm_av_crash_rate_assessment_20260601.md (323 行)，§0 FINAL RESULT 置顶 (rate=525.63 ppm 拆分 + 收敛表 + headline finding lane 87339791#0_2)，§1 how crash rate is calculated (IS math + p 来源 constants.py 11 类校准 + q 公式 + avoidable/unavoidable 两类 W profile)，§2 experiment setup，§3 每个 attributed/unattributed 撞车详细位置时间 BV，§4 5 条 key findings，§5 estimator variance 分析 (CV 随 n 上升的 cap 解释)，§6 6 条 methodology limitations，§7 priority-tagged recommendations。关键 caveat：p_TLS = 0.01014/tick 比 FHWA 国家 TLS-running rate ~5e-8/mile 高 100-1000×，需要 spec mapping PDF 出处确认是否过高校准。"
         }
       ],
       "in_progress": [],
@@ -865,14 +873,6 @@
         {
           "title": "Hunter 改并行 + 关 GUI——3 个 slot 同时跑，throughput 3-4 → ~10 runs/h",
           "detail": "ub4_hunter.sh 加 SLOT_ID 第一参数：nth 改 ub4_hunt_revert_p{SLOT}_r{N}_s{SEED}，TMP_YAML、PROGRESS_LOG、CRASH_LOG、hunter_stdout 全部带 p{SLOT} 后缀避免 race。Yaml 里 gui_flag: true 改 false（sed -i）——之前一直带 GUI 路径跑虽然 libsumo 没真开窗但浪费 cycles。RANDOM 初始化 stagger by SLOT * 7919 + epoch 避免两 slot 初始 seed 撞。启 3 slot 间隔 2s（避开 GPU init 撞峰），每 slot ~878 MiB 初始，CNDE NN load 后 ~3-5 GB。总 GPU 3.6/16 GB 初始。绑定 session 到 INC-164。"
-        },
-        {
-          "title": "发现 IDM AV 在 lane 87339791#0_2 处可复现的 avoidable-TLS 失败几何 (2/3 avoidable crashes 在同 lane)",
-          "detail": "n=144 数据里 3 个 avoidable 撞车的位置审查：(1) run01_seed27072 t=349.3s lane 87339791#0_2 pos=10.64 rear-end；(2) run09_seed25008 t=356.5s lane 87339791#0_2 pos=12.92 rear-end；(3) run03_seed27110 t=70.8s lane 4411907471#0_1 pos=33.60 side-collision。**2/3 集中在同 lane 同位置**，发生时间也接近（~350s），明确是 IDM 跟车模型在某特定 TLS 几何下的可复现弱点——avoidance.py 判定 'AV 本可刹住' 但 IDM smooth braking (max ~3 m/s²) 来不及响应 emergency cross-traffic。这不是 outlier 也不是 sim bug，是真实 IDM behavioral 缺陷率 ~1 per 456 mile。"
-        },
-        {
-          "title": "切换到 paper-style stop-at-crash per-episode IS estimator：改 yaml + 外科性 patch nade_with_av.py",
-          "detail": "用户要求严格走 paper per-episode IS 方法。改 configs/simulation/ncrc_combined_adversity.yaml：continue_on_av_collision: true → false（与 av_debug_control=true 联动让 sim 在 AV 撞车时 return False 终止）。但第一次跑发现 nade_with_av.py 的 'AV_left' 分支也会被 return False 触发（line 1602-1622），导致 BV-BV 堵车 + AV teleport 也错误地终止 sim。Surgical patch line 1620-1622：把 'AV left the simulation, stop the simulation. return False' 改成 'not treating as AV-crash, continuing.' 只 logger.warning 不 return —— 这样只有真实 AV 碰撞才停。同时给 series runner 加 30 min worker timeout 防 SUMO 单 worker segfault hang。已启动 bquvzuwif (12 序列 episodes, seed 28000-28011)。"
         },
         {
           "title": "Audit 测试代码版本——发现 revert 分支 A3 NaN/Inf 没完全删 + 真测试目标重定到 cnde-yilin（带防御版）",
