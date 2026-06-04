@@ -2,7 +2,7 @@
   "name": "Haotian",
   "role": "Simulation Engineer",
   "company": "Inchor Mobility",
-  "last_updated": "2026-06-01",
+  "last_updated": "2026-06-04",
   "days": [
     {
       "date": "2026-05-07",
@@ -869,6 +869,41 @@
           "detail": "现状：constants.py 每类 p = base × 18-22 个数字，无 inline 文档，出处只在 spec mapping PDF。未来 re-calibration 或客户 (ISUZU) 改 ODD 时无法追溯。需要：(a) 为每个 multiplier 加 inline comment 说明来源；(b) 或写 derivation script 把 multiplier 跟 spec PDF 表对齐；(c) 或迁移到带 reference 的 yaml 配置。"
         }
       ]
+    },
+    {
+      "date": "2026-06-02",
+      "completed": [
+        {
+          "title": "诊断昨天的 UB#4 hunter——发现 281 runs / 0 crashes 全在 cnde-yilin 上（带 Dylan 防御）",
+          "detail": "查 output/raw_data/ub4_hunt_r{0..280} 的 run_metadata.json，code_versions.terasim_branch 都是 cnde-yilin commit 0a31c7d8 dirty=True。防御 A1/A2/A3/D/E 全在的版本——0 crashes 是因为防御就是在挡 UB#4，不能 prove revert 安全。Hunter root PID 2511165 还在跑（Jun 01 启动，24h+ elapsed），fork-style 每 run 起 sub-bash + gdb + python。还遗留 6 个 orphan 进程（PIDs 1346714, 1346737, 1347944, 1347967, 1357084, 1357111，对应 r278/r279/r280 unfinished runs）吃 13.7 GB GPU。GPU 显示 rustdesk + 3 个 ~5 GB python，nvidia-smi 确认。kill -9 全部杀干净，GPU 回到 323 MiB。"
+        },
+        {
+          "title": "在 inc-240-revert-dylan-test 上建新 worktree + 写 hunter 脚本——这次真去找 UB#4",
+          "detail": "git worktree add .claude/worktrees/ub4-hunt-revert inc-240-revert-dylan-test，HEAD 在 97c7ba6（revert D+E）+ a10bde3（revert A1+A2+A3）。Sanity check：grep _vehicle_exists_static=0、Safety check=1（只剩注释残留）、ghost=0——防御真的 revert 干净。Maps 是 B2 同步不在 git 里，新 worktree 的 examples/maps/ 只有 3LaneHighway/Mcity/town10 三个空 stub 子目录没 ann_arbor_full。rm -rf 后 ln -s $MAIN/examples/maps —— aa_fixed_enhanced.net.xml 和 cnde_map_ann_arbor_full_v6.pkl 通过 symlink 解析到主 repo 的副本。写 ub4_hunter.sh：循环里每 run 用 python -c 把随机 seed + ub4_hunt_revert_rN_sM nth 注入到 /tmp/hunter_yaml_N.yaml，USE_LIBSUMO=1 跑 run_experiment_cnde.py，检 segfault.log/faulthandler_trace.txt/非零 exit 任一就记 crash。单 slot 串行后台启动。"
+        }
+      ],
+      "in_progress": [],
+      "next_steps": []
+    },
+    {
+      "date": "2026-06-03",
+      "completed": [
+        {
+          "title": "Serial hunt 9h 31 runs / 0 crash 后怀疑 CNDE 没真跑——grep 验证：CNDE active 但控制 0 车辆 ~93% 时间",
+          "detail": "客户问 'still didnt find it? you sure you are running cnde?'。查 r19（1578s 全程 run）的 loguru：'CNDE simulator built and configured' + 'CNDE Experiment started' + cnde_audit.jsonl 3.1 MB + cnde_trajectory_log.jsonl 18 MB——CNDE 确实在运行。但 grep 'Control commands: N CNDE' 分布: 30636 次 0 CNDE / 1738 次 1 / 514 次 2 / 198 次 3——只有 7.4% 的 tick 有 CNDE 控制。原因：cache_radius=100m, control_radius=50m，但 NCRC 路线大段时间 AV 周围没 BV 进 control_radius（log 显示 cache=1 即只有 AV 自己最常见）。对比 cnde-yilin r150：12.9% CNDE active——同样稀疏。31 runs × 2450 CNDE-control ticks ≈ 76k effective UB#4 tests，没出 → 真实率 <0.001%/tick 或需要 specific traffic（AV 前方 dense BV cluster + lane change 同时发生）。"
+        },
+        {
+          "title": "Hunter 改并行 + 关 GUI——3 个 slot 同时跑，throughput 3-4 → ~10 runs/h",
+          "detail": "ub4_hunter.sh 加 SLOT_ID 第一参数：nth 改 ub4_hunt_revert_p{SLOT}_r{N}_s{SEED}，TMP_YAML、PROGRESS_LOG、CRASH_LOG、hunter_stdout 全部带 p{SLOT} 后缀避免 race。Yaml 里 gui_flag: true 改 false（sed -i）——之前一直带 GUI 路径跑虽然 libsumo 没真开窗但浪费 cycles。RANDOM 初始化 stagger by SLOT * 7919 + epoch 避免两 slot 初始 seed 撞。启 3 slot 间隔 2s（避开 GPU init 撞峰），每 slot ~878 MiB 初始，CNDE NN load 后 ~3-5 GB。总 GPU 3.6/16 GB 初始。绑定 session 到 INC-164。"
+        }
+      ],
+      "in_progress": [
+        {
+          "title": "3 个并行 UB#4 hunter 在 inc-240-revert-dylan-test 上继续跑——目标 200+ runs prove 防御移除安全",
+          "detail": "p0/p1/p2 三个 slot，hunter PIDs 2757559/2757674/2757784，scripts/ub4_hunter.sh {SLOT}。每 run 取随机 seed + ub4_hunt_revert_p{SLOT}_r{N}_s{SEED} output dir。监控：/tmp/ub4_hunter_p{0,1,2}_progress.log（每 run 一行），/tmp/ub4_hunter_p{0,1,2}_crashes.log（只 crash 才有内容）。crash 判定：segfault.log 或 faulthandler_trace.txt 非空，或 rc != 0。停止：kill -9 $(cat /tmp/ub4_hunter_p{0,1,2}.pid) + pkill -9 -f hunter_yaml_p。"
+        }
+      ],
+      "next_steps": []
     }
   ],
   "weekly_reports": [
