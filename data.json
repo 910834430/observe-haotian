@@ -1054,22 +1054,42 @@
         {
           "title": "find-map 3 个 bug 修复 + sim-replay 从 upstream 集成 + 记忆 always-AV-with-tracking 落盘",
           "detail": "find-map 修了 3 个 bug:(1) Nominatim 不支持 'Main and Huron' 交叉路口查询,reference 改成单街名示例 + 加 gotcha 警示;(2) intersection road-type 默认 --osm.sidewalks true 只读 OSM 已有 tag,downtown 多数没有,加 --sidewalks.guess --crossings.guess 让 netconvert 自己猜;(3) Overpass 空响应让 netconvert 报隐晦错,新增 count_osm_ways() 预检,exit 4 配可操作的错误文本。sim-replay 从 upstream/add-sim-replay-skill 分支 cherry-pick 进 add-ate-skills,接到 make-event Stage 6 作为可选回放,traci 子进程(非 libsumo)起 sumo-gui 读 heading_tracker.jsonl 用 moveToXY 重放轨迹。在 ~/.claude/.../memory/ 新增 feedback_always_av_with_tracking.md 强约束 '每个 TeraSim 仿真必须含 ego AV、对抗针对 AV、GUI 跟随 AV、AV route 必填',并在 MEMORY.md 索引登记。"
+        },
+        {
+          "title": "v13 mass batch n=40 启动后讨论 per-event vs per-episode 选哪种 IS estimator,user 选 per-episode → kill v40 改 n=80 stop-at-first-crash",
+          "detail": "v13 n=40 跑半小时后,user 指出每个 episode 应该当一个 Bernoulli trial 算 crash rate (而不是 per-event 计算每个撞车 contribution)。看 v13 small batch 8/8: seed45001 一个 ep 6 attr crashes (continue_on_av_collision=true 让 AV stuck 后被连撞), seed45005 1 attr, 其他 6 ep 0 attr → per-episode 25%, per-event 8.33%。决定 kill n=40, 改 continue_on_av_collision: false + n=80, 让每 ep 第一次撞即终止,得到干净的 25%-50% per-episode rate (估 n=80 给 ~20-40 crashed eps)。"
+        },
+        {
+          "title": "发现 continue_on_av_collision: false 没真正生效 — av_debug_control hardcoded True 在 run_experiment_cnde.py:365",
+          "detail": "n=80 stop batch 跑 1 小时后查 10 runs: seed45008 (2 attr at t=398 + t=435 间隔 37s), seed45010 (3 attr 跨 240s) — AV 没在第一次撞后终止。trace 代码: nade_with_av.py 的逻辑是 if continue=true: 继续 elif not av_debug_control: 继续 (会进这里因为 av_debug_control=True) else return False。run_experiment_cnde.py:365 把 av_debug_control 硬编码为 True,导致 even with continue=false 也走 elif 分支继续跑。所以 v13 v10 batch 数据里的 cascade crashes 其实没真正按 stop-at-first-crash 算。"
+        },
+        {
+          "title": "讨论 v10 setSpeed clamp 与 Dylan original CNDE handover 的 adversary 语义差别 → user 决定 revert CNDE-protection patches 看原版 NN 行为",
+          "detail": "user 反思 v10 的 setSpeed clamp + speedMode=32 与 Dylan 原版 CNDE 处理 adversary 方式不一样。讨论各种 trade-off: v10 (语义假但高 conversion 60% Leader), v12 (NN 抹平 → 0% conv), v13 (handover, 28% Leader natural conv 但 8.7m/s BV impact 真实)。我深挖发现 update_control_cmds_from_predicted_trajectory 是核心 bug — 把 ACCELERATION 命令 mutate 成 NN naturalistic trajectory,user 提出 'geometry 满足时应 handover 给 TeraSim adversity (像 NDE 一样)' 这一关键洞察。之后 user 决定回到 0a31c7d (Dylan defenses intact, INC-241 protection 去掉) 看原版 CNDE 跑 IS 的真实行为。"
+        },
+        {
+          "title": "Revert nde_controller.py + nnde.py 到 0a31c7d — 删除 65 行 INC-241 CNDE 保护代码 (IS-Skip guards, _IS_COMMITTED_BVS registry, AV-proximity filter)",
+          "detail": "git checkout 0a31c7d 把两个 CNDE 文件回到 5月25日状态。删除内容: (1) nde_controller.py 的 _IS_COMMITTED_BVS dict + _PERSISTENT_ADVERSARY dict + 3 处 IS-Skip guards (execute_trajectory_command 限制 CNDE_TRAJECTORY, all_checks_on 完全删, all_checks_off 防御性保留); (2) nnde.py 的 AV-proximity safety filter (cnde_sim_to_control_commands 里 3m fallback to SUMO IDM, 含 veh_id!='AV' self-fire bugfix)。Dylan A1+A2+A3 segfault defenses 全部保留。Pre-revert v13 state 保存在 git stash@{0}。doc cnde_inc241_changes_to_revert_20260608.md (200 行) 记录所有被删的代码块 + 预期影响 (NN imperfection 撞 AV 回来 74k ppm baseline, adversary 执行通过 SUMO IDM 但 smode=32 不是 6/7 因 all_checks_off 覆盖)。"
+        },
+        {
+          "title": "Post-revert flow 分析: IS pipeline patches (nade.py / nade_with_av.py) 保留,adversity 命令仍能通过 SUMO IDM 执行 — 但 smode=32 而非 6 + duration 实际是 5s 而非 2s",
+          "detail": "代码 trace: IS commit → nade.py IS-Adv-Relax setSpeedMode(6) → dispatcher 'Always accept — preempt' branch → all_checks_off (没 IS-Skip 了) 覆盖 smode 到 CNDE_SPEED_MODE=32 → cached ACCELERATION 命令 → execute_acceleration_command 每 tick setSpeed(cur + ff_accel × dt)。后续 ticks DEFAULT/busy 走 'Non-trajectory continue executing' 分支,持续 setSpeed。5 秒后 _is_committed_bvs window 过期 → BV 回 cnde_control_ids → CNDE_TRAJECTORY 抢占 → CNDE NN 接管。所以 actual adversary lasts ~5 秒 而非设计 2 秒。smode=32 没 safety,效果接近 v10 setSpeed clamp 但不需要预算 target_v。n=4 verification batch 已启动 (45min 验证 attr vs unattr 分布)。"
         }
       ],
       "in_progress": [
         {
-          "title": "v13 batch n=8 跑测 — proper CNDE→TeraSim adversity handover, 等约 60 min 看 attr conversion 是否提升到 15-40% 范围 (v10 SUMO clamp 22.8%, v12 NN 自然 0%)",
-          "detail": "v13 启动时间 13:12, 4 PIDs alive, GPU 3.7 GB. 已 scheduled 14:13 wakeup 检查首 wave (3/8) 完成情况。关键指标: 是否有真实 LeaderAdv-attributable 撞 AV (BV ACCELERATION 命令直接由 SUMO IDM 执行, ff_accel * 2s 自然累积速度差距 → 追上 AV 撞)。BV impact 速度应物理合理 (~5-10 m/s 额外冲量)。若 conversion 在合理范围 (15-40%) + 数据 naturalistic, v13 即 production 版本, 可以做 mass batch 收集 ≥30 attr crashes。"
+          "title": "Post-revert n=4 verification batch — 验证 reverted code 下 adversity 是否仍能撞,以及 NN imperfection unattr 撞车率",
+          "detail": "/tmp/parallel_post_revert_test/, IS_FLOOR=0.05 + IS_AV_RADIUS=100 + continue_on_av_collision=false。3 workers active, GPU 3GB。45min 后 scheduled wakeup 查首 wave。关键指标: (a) attr Leader crashes 是否仍有 (调用流程基本对的话应该 yes); (b) unattr crashes 数量 (无 proximity filter 应该回到 v6b 74000 ppm 量级); (c) signal-to-noise — attr 占比是否足够做 IS estimator。"
         }
       ],
       "next_steps": [
         {
-          "title": "v13 验证通过后跑 mass batch (n=24) 收集 Stage 2 ≥30 attributable crashes 完成 INC-269 目标",
-          "detail": "v10 估计每 run 2.6 attr/run, n=24 给 60 attr; per-episode (用户的更严算法, 一个 episode = 一个观测) 估计 ≥80% episode-with-crash 率 → n=24 给 ~19 episode crashes, 边界。可能需要 n=40-50 为 per-episode 保险。或考虑 continue_on_av_collision=false (每 episode 第一次 crash 即终止) 让数据更干净 — Bernoulli 单 trial. 跑完后做 per-event 和 per-episode 两种 IS estimator 对比, 计算 CNDE crash rate per million miles, 对比 NDE Stage 1 baseline 104 ppm."
+          "title": "决定下一步: 接受 post-revert state 跑 mass batch (含 NN 噪声), 或选择性恢复 proximity filter (干掉 NN unattr), 或重新设计 adversary 走 NDE-style (绕 CNDE NN)",
+          "detail": "post-revert verification 结果决定方向: (1) 若 attr >> unattr → 可直接 mass batch; (2) 若 unattr 比 attr 多 → 需要 proximity filter (或类似机制) 区分; (3) 若 attr=0 (adversary 不工作) → 需要重新考虑 IS commit 后的命令流。同时也要修 av_debug_control 的 hardcoded True 让 continue=false 真正生效。"
         },
         {
-          "title": "若 v13 给的 0% TrafficRule 转化率, 考虑路径冲突门 (path-conflict gate) — 只 IS-sample 与 AV 路径在未来 N 秒内会相交的 BV",
-          "detail": "目前 IS_AV_RADIUS=100m 只是空间 disc, 不考虑路径几何。TrafficRule 在交叉口 49/49 commits 但 0 attr (BV 闯红灯但 AV 路径不经过那个交叉口)。改进: 算 BV 当前轨迹 future N 秒位置 vs AV 已知 route, 检查 minimum distance < threshold. 实现复杂度中等 (需要 traci.vehicle.getRoute + 路径预测), 估计 ~50 行 + 单元测试. 暂不在 v13 范围, 视 v13 mass batch 结果再决定优先级."
+          "title": "修 av_debug_control 硬编码 bug — 把 scripts/run_experiment_cnde.py:365 改成读 yaml,让 continue_on_av_collision=false 真正在 nade_with_av.py 触发 return False",
+          "detail": "当前 av_debug_control=True hardcoded 让 elif 分支永远不进 → continue=false 也仍然 continue。改成 av_debug_control=getattr(config.environment.parameters, 'av_debug_control', False)。但要注意 ann_arbor_cnde_autoware.yaml 有显式 av_debug_control: false (cosim 模式需要这个),所以 default 应该是 False, 在 ncrc_combined_adversity.yaml 加 av_debug_control: true 才能让 stop 生效。"
         }
       ]
     }
