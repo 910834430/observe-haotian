@@ -2,7 +2,7 @@
   "name": "Haotian",
   "role": "Simulation Engineer",
   "company": "Inchor Mobility",
-  "last_updated": "2026-06-04",
+  "last_updated": "2026-06-08",
   "days": [
     {
       "date": "2026-05-07",
@@ -970,6 +970,86 @@
         {
           "title": "把今天的 cap saturation / TLS calibration / main-vs-cnde-yilin divergence 分析写进 docs/idm_av_crash_rate_assessment_20260601.md",
           "detail": "加新 section §8 Implementation Notes: (a) cap saturation 是 high-p 类 IS 失效的根本原因 (b) main vs cnde-yilin divergence 包括 AV-targeting filter + time_horizon_step (10 vs 5) + highway_rearend_prob (0 vs 1.85e-8) (c) p_TLS = 0.01014 的来源和争议 (d) 三层修复方案对比 (修 p / 修 cap / 修 mag) + 各自 trade-off。"
+        }
+      ]
+    },
+    {
+      "date": "2026-06-07",
+      "completed": [
+        {
+          "title": "v6b CNDE Stage 2 baseline: 24 runs / 133 mi / 64 IS commits → 0 attributable AV crashes, 10 NN imperfection unattr crashes, 67/67 commits 全是 TrafficRule",
+          "detail": "跑 v6b mass batch (max_concurrent=4 → 13 OOM, 11 healthy + 3 rescue ≈ 14 useful runs). 所有 IS commits 都是 TrafficRuleAdversity (intersection_tfl), 因 per-class probability 差距巨大: tfl=0.01014 vs highway_rearend_accel=1.85e-08 (300,000× 比例)。Leader/Cutin/Follower/Headon/Merge 0 fire. TrafficRule commits 大多在远离 AV 的交叉口 → 0% IS→crash conversion. NN imperfection 仍有 74000 ppm 残留 unattr crash rate (vs NDE baseline 104 ppm)."
+        },
+        {
+          "title": "诊断 proximity filter 严重 bug: 一直只对 'AV' 自己 fire (self-distance=0), 真正的 BV 根本没经过检查",
+          "detail": "v6 batch logs 显示 1410-3500+ 个 proximity events per run, 但 all vehicle ID = 'AV'. 原因: cnde_sim_to_control_commands 对每辆车 (包括 AV 自己) 算其 NN 预测位置与 AV 投影位置的距离 — AV 与自己的距离永远 0, 永远触发。Fix: 在 nnde.py 加 `if veh_id != 'AV'` guard. 修复后 self-fire 降到 0, BV-targeted fires ~5-50/run (合理量级)。这意味着 v4→v5 'fixed dyn_bv_34 三连撞' 实际是随机性, 不是 filter 功劳。"
+        },
+        {
+          "title": "加 IS_FLOOR=0.05 + IS_AV_RADIUS=100m 两个 env 旋钮, 让 Leader/Cutin/Follower 在低 ndd_prob 下也能 fire",
+          "detail": "IS_FLOOR 在 get_IS_prob 加最低值: `IS_prob = max(amplified, IS_FLOOR)`. Leader ndd=5e-8 × 20 = 1e-6 → 即使 trigger 命中也几乎不 commit; 加 floor 0.05 → 每 qualifying tick 5% 概率 commit. IS_AV_RADIUS=100m 在 IS sampling loop 加 AV-vicinity gate (BV-AV 距离>100m 跳过), 阻止远处 TrafficRule 独占 commits. v7 batch n=8 验证: class 分布从 100% TrafficRule → 49 TrafficRule / 21 Leader / 12 Cutin / 1 Follower。但 0% attr crash 仍残留 — 需要下一层修复。"
+        },
+        {
+          "title": "v8 LeaderAdv duration 2→8s 实验失败 (1 attr / 122 IS = 0.8%), 诊断 IS sampling per-tick 独立采样问题",
+          "detail": "想法: 让 Leader BV 加速更久, 给追距更多机会。但实际不工作。诊断 dyn_bv_0 速度 trace: IS commit 后 BV 速度 10.22→4.5 m/s 在 4 秒内 (在减速, 不是加速)。原因: IS sampling 每 tick 独立 Bernoulli, IS_FLOOR=0.05 → 95% ticks 不 commit → 95% ticks BV 回到 normal IDM → adversary command 实际只 5% ticks 生效, 累积无效果。NDECommand 的 `duration` 字段没被 executor 强制保持。1 attr crash 来自 TrafficRule (BV t=1513 IS-Register, 5.6s 后撞 AV)。"
+        },
+        {
+          "title": "v9 突破: 在 IS-Register 时直接 traci.setSpeed(bv, cur+accel·dur) + setSpeedMode(32) 让 SUMO 持续保持 adversary speed → 0% → 33% raw conversion (12.6% AV-alive)",
+          "detail": "绕开 IS per-tick 采样问题: 不依赖 cached command 续行机制, 而是在 IS commit tick 直接调用 traci 设目标速度。SUMO 接管后自然加速到目标, 不需要每 tick 重发命令。结果: 87 IS commits / 49 mi / 11 alive attr + 18 raw attr (含 cascade post-AV-disabled crashes). LeaderAdv 单独 60% conversion (37 commits → 29 raw / 11 alive crashes). seed45005 异常 10 crashes 因 continue_on_av_collision=true + AV 停在 0 m/s 被多车连撞 ('ballistic cascade')。BV impact median 30+ m/s, max 35 m/s — 不真实。"
+        },
+        {
+          "title": "v10 production: LEADER_ADV_DURATION 改回 2.0 (原校准) + target_v cap at 1.2×lane_max_speed → 22.83% IS→crash, BV impact median 12 m/s 真实",
+          "detail": "v9 的 8s duration × 3 m/s² ff_accel = 24 m/s 弹道速度太假。v10: env LEADER_ADV_DURATION 默认 2.0, target_v 加 `min(target, 1.2 × lane_speed_limit)` 上限。8 runs / 49 mi / 92 IS commits / 21 attr crashes (3-sec pair-dedup, 无 AV-speed filter)。LeaderAdv 单类 60% conversion (35 commits → 21 attr). BV impact median 12.08 m/s, max 17.11 m/s — 物理合理. 0 unattr alive crashes (proximity filter + clean adversary 完全清除 NN imperfection 撞)。Mass batch ready: 估计 n=24 give ~60 attr crashes, 远超 INC-269 ≥30 目标。"
+        },
+        {
+          "title": "Worktree 陷阱排查 + 写完整 v6b→v10 progression 报告 docs/cnde_stage2_v10_breakthrough_20260608.md (151 行)",
+          "detail": "EnterWorktree 默认从 origin/main 分叉 — 但 main 没有 CNDE 代码 (nnde.py 缺失), 也没有 ann_arbor_full / 520toRapp / houston_replay 地图 (gitignored)。Fix: git reset --hard cnde-yilin + symlink 4 个 map dirs。记忆条 [terasim-worktree-pitfall] + [terasim-cuda-concurrent-cap] (CNDE NN per-worker GPU 1.5→6GB 内 30min, 4 并发 OOM, 3 + expandable_segments 稳定)。报告记录 5 patches (proximity self-fire bugfix, IS_FLOOR, IS_AV_RADIUS, traci.setSpeed persistence, lane-speed cap) 的逐步效果 + open questions (TrafficRule 仍 0% 转化, Cutin under-tested)。"
+        }
+      ],
+      "in_progress": [],
+      "next_steps": []
+    },
+    {
+      "date": "2026-06-08",
+      "completed": [
+        {
+          "title": "用户指出 v10 setSpeed+speedMode=32 改变了 adversary 语义 — 不再是 'ff_accel 2 秒' 而是 'BV target speed clamp 无视所有 SUMO 安全' — 决定改 proper persistent registry",
+          "detail": "用户敏锐发现: v10 在 IS commit 时直接 setSpeed(cur+ff_accel*duration) → SUMO 用 maxAccel (而非 ff_accel) 一冲到目标速度并锁定。speedMode=32 disable 所有 safety. 与 adversity 原设计 (CommandType.ACCELERATION + ff_acceleration × 2 秒) 在物理上和语义上都不同。用户的批评对 — v10 的 60% Leader 转化率部分来自这个语义偏差, 不是真实 naturalistic adversary 危险性。同意改造成 proper persistent registry: nade.py 写 {cmd, end_time}, executor 每 tick 用 cached adversary 命令覆盖, SUMO 用 IDM 物理执行 ff_accel 加速, duration 到期自然 expire."
+        },
+        {
+          "title": "v11/v11b proper persistent registry 尝试失败 — bypass 引发 dispatcher 反复进入 'Always accept — preempt' 分支 → 60x sim 慢爆 → workers 在 sim_t≈40 全 timeout",
+          "detail": "v11 在 execute_control_command 顶部检查 _PERSISTENT_ADVERSARY[veh_id], 若 active 把 control_command 替换为 cached adversary cmd。问题: 这个新 cmd 仍走 dispatcher 'Always accept' 分支 → 每 tick 调 all_checks_off + interpolate_control_command + 重缓存 + first_step=True。8 workers 全在 IS commit 后 sim_t≈40 时停 (每 tick wall time 上升到 60s+)。v11b 修复 — bypass 后直接 call execute_control_command_onestep 然后 return, 不走 dispatcher 重新缓存。但 v11b 又有新问题, 见下一条。"
+        },
+        {
+          "title": "v11b 调试发现 IS-Adv-Bypass-first 在 fire 但 cmd=CommandType.TRAJECTORY 不是 ACCELERATION — 真凶: update_control_cmds_from_predicted_trajectory 把 adversity 的 ACCELERATION 命令 mutate 成 NN 预测轨迹",
+          "detail": "加 logger.info 排查 bypass 路径, 发现 persist['cmd'].command_type=TRAJECTORY 而非 ACCELERATION。看 utils/nade/tools.py 的 update_control_cmds_from_predicted_trajectory: 它对所有 mode='adversarial' 的 ACCELERATION 命令做 in-place mutation, command_type→TRAJECTORY, future_trajectory←env_future_trajectory[bv]['adversarial']。我的 IS-Register 拿到的 _cmd 对象后来被 mutate 了 (Python object identity 不变, 字段被改)。所以 persist 看到的是 TRAJECTORY → dispatch 到 execute_trajectory_command → 我的 IS-Skip 又把它早返回了。整个机制自相互毁。"
+        },
+        {
+          "title": "v12 拆除全部 IS-Skip + bypass + persistent registry, 让 adversary TRAJECTORY 自然流过 — 8 runs / 65 IS commits / 0 attr + 0 unattr crashes 验证 NN 抹平 adversary",
+          "detail": "v12 极简版: (a) execute_trajectory_command IS-Skip 改为只挡 CNDE_TRAJECTORY (不挡 TRAJECTORY); (b) all_checks_on IS-Skip 删除 (让 speedMode 自然重置); (c) bypass 删除; (d) nade.py IS-Register 仅 setSpeedMode(7 for TLS / 6 for ACCELERATION)。结果: sim 正常推进 (sim_t 1700-1900), IS class 多样化 (TrafficRule 32 / Leader 18 / Cutin 12 / Follower 3), 0 attr 0 unattr crashes. dyn_bv_10 trace: IS commit 后速度 5.77 → 3.15 m/s, BV 在跟车减速, 不是加速。NN 'adversarial' trajectory 本质就不激进 — 训练于真实驾驶数据, 即使 mode=adversarial 也不预测撞车轨迹。"
+        },
+        {
+          "title": "用户洞察 — adversary geometry 满足时应 handover 给 TeraSim adversity (而非 NN 续控), 同 NDE 模式. v13: 把 IS-committed BV 从 update_control_cmds_from_predicted_trajectory 排除 → 保留 adversity 原命令",
+          "detail": "用户指出 v12 0% 转化的根因: NN 把 adversity 的设计意图 (LeaderAdv ACCELERATION + ff_accel × 2 秒) 用自己预测的 naturalistic 轨迹替换掉了。正确做法是 — 当 trigger 几何条件满足, 把那个 BV 的控制完全 handover 给 TeraSim adversity 模块 (相当于退化成 NDE 模式), CNDE NN 只控制 background traffic。v13 修复: 在 nade_with_av.py:849 调用 update_control_cmds_from_predicted_trajectory 时把 IS-committed BV (5 秒窗口内) 加入 excluded_agent_set。这样 adversity 的 ACCELERATION/LEFT/RIGHT 命令保留, 由 SUMO IDM 物理执行 (setSpeed 每 tick 增加 ff_accel*dt)。v13 batch 已启动, 预期 15-40% Leader 转化 (SUMO IDM bound 加速但 adversity 是真实 intent)。"
+        },
+        {
+          "title": "记忆条更新: cnde-stage2-blockers 从 'blocked 0% conversion' 改为 'UNBLOCKED 22.8% via 5 patches', + 加 worktree pitfall + CUDA concurrent cap 两条参考记忆",
+          "detail": "Update MEMORY.md index 反映 Stage 2 unblock 状态。三个新记忆条: (1) project_cnde_stage2_blockers — 5 patches 总览 + IS_FLOOR/IS_AV_RADIUS env vars + 已知 0% TrafficRule 与 Cutin under-tested 问题; (2) reference_terasim_cuda_concurrent_cap — max_concurrent=3 + PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True, 防 CNDE NN GPU 累积到 6GB OOM; (3) reference_terasim_worktree_pitfall — 默认 worktree 从 origin/main 分叉, CNDE 代码 + 4 个 map dirs 缺失, 需 git reset + symlink fix."
+        }
+      ],
+      "in_progress": [
+        {
+          "title": "v13 batch n=8 跑测 — proper CNDE→TeraSim adversity handover, 等约 60 min 看 attr conversion 是否提升到 15-40% 范围 (v10 SUMO clamp 22.8%, v12 NN 自然 0%)",
+          "detail": "v13 启动时间 13:12, 4 PIDs alive, GPU 3.7 GB. 已 scheduled 14:13 wakeup 检查首 wave (3/8) 完成情况。关键指标: 是否有真实 LeaderAdv-attributable 撞 AV (BV ACCELERATION 命令直接由 SUMO IDM 执行, ff_accel * 2s 自然累积速度差距 → 追上 AV 撞)。BV impact 速度应物理合理 (~5-10 m/s 额外冲量)。若 conversion 在合理范围 (15-40%) + 数据 naturalistic, v13 即 production 版本, 可以做 mass batch 收集 ≥30 attr crashes。"
+        }
+      ],
+      "next_steps": [
+        {
+          "title": "v13 验证通过后跑 mass batch (n=24) 收集 Stage 2 ≥30 attributable crashes 完成 INC-269 目标",
+          "detail": "v10 估计每 run 2.6 attr/run, n=24 给 60 attr; per-episode (用户的更严算法, 一个 episode = 一个观测) 估计 ≥80% episode-with-crash 率 → n=24 给 ~19 episode crashes, 边界。可能需要 n=40-50 为 per-episode 保险。或考虑 continue_on_av_collision=false (每 episode 第一次 crash 即终止) 让数据更干净 — Bernoulli 单 trial. 跑完后做 per-event 和 per-episode 两种 IS estimator 对比, 计算 CNDE crash rate per million miles, 对比 NDE Stage 1 baseline 104 ppm."
+        },
+        {
+          "title": "若 v13 给的 0% TrafficRule 转化率, 考虑路径冲突门 (path-conflict gate) — 只 IS-sample 与 AV 路径在未来 N 秒内会相交的 BV",
+          "detail": "目前 IS_AV_RADIUS=100m 只是空间 disc, 不考虑路径几何。TrafficRule 在交叉口 49/49 commits 但 0 attr (BV 闯红灯但 AV 路径不经过那个交叉口)。改进: 算 BV 当前轨迹 future N 秒位置 vs AV 已知 route, 检查 minimum distance < threshold. 实现复杂度中等 (需要 traci.vehicle.getRoute + 路径预测), 估计 ~50 行 + 单元测试. 暂不在 v13 范围, 视 v13 mass batch 结果再决定优先级."
         }
       ]
     }
