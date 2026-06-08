@@ -1034,6 +1034,26 @@
         {
           "title": "记忆条更新: cnde-stage2-blockers 从 'blocked 0% conversion' 改为 'UNBLOCKED 22.8% via 5 patches', + 加 worktree pitfall + CUDA concurrent cap 两条参考记忆",
           "detail": "Update MEMORY.md index 反映 Stage 2 unblock 状态。三个新记忆条: (1) project_cnde_stage2_blockers — 5 patches 总览 + IS_FLOOR/IS_AV_RADIUS env vars + 已知 0% TrafficRule 与 Cutin under-tested 问题; (2) reference_terasim_cuda_concurrent_cap — max_concurrent=3 + PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True, 防 CNDE NN GPU 累积到 6GB OOM; (3) reference_terasim_worktree_pitfall — 默认 worktree 从 origin/main 分叉, CNDE 代码 + 4 个 map dirs 缺失, 需 git reset + symlink fix."
+        },
+        {
+          "title": "新建 add-ate-skills 分支并把 find-map / generate-traffic / new-scenario / run-scene / verify-scene / sim-replay / make-event 整套 skill 合到一个分支",
+          "detail": "把 INC-225 user-facing skills 的工作从 TeraSim 主 repo 隔离到 sibling 目录 ~/Projects/Isuzu_cosim/TeraSim_skills/ 避免和 Crash Rate agent 的并行测试串台。所有 skills 合并到单一 add-ate-skills 分支,删掉 corner-case (与 new-scenario 重复),清理 examples/scripts/ 里的 cutin 实验脚本和 tests/test_make_event tests/test_corner_case 的死目录。新增 .claude/commands/*.md 7 个 wrapper 让用户在 / 菜单看到 find-map / generate-traffic / new-scenario / verify-scene / run-scene / make-event / sim-replay 全套 slash 入口。"
+        },
+        {
+          "title": "make-event 改成 USER 模式对话编排器:6 阶段链 + 严格 task-list-only 契约 + 3 个预问 + 1.0 强提交",
+          "detail": "make-event 重写为顶层编排 skill,USER 模式跑在主会话但严格遵守 'no prose between tool calls / no visible cat-grep / 中间产物只 redirect 到 log file' 契约。流程:AskUserQuestion 一次性 batch 3 个问题(Location / Traffic / Adversity,Other 自动转 free-text) → TaskCreate 6 个 task → 顺序跑 find-map → generate-traffic → new-scenario → verify-scene → run-scene → sim-replay,每阶段 TaskUpdate in_progress/completed。new-scenario 模板默认 probability=1.0 强提交(几何前提一旦满足就 fire),环境默认 NADEWithAV 且 GUI 自动 trackVehicle(AV) + setZoom(800)。DEVELOPER 模式仅在 $ARGUMENTS 含 'dev mode / verbose / --debug' 时打开,放开诊断 prose。中途试过把 make-event 作为 subagent 子会话隔离 context,用户反馈 'lets bring back the make event to main session and show the task list',回到主会话 + task list 作为唯一进度叙事。"
+        },
+        {
+          "title": "verify-scene 2 阶段验证:Phase1 headless seed 扫描 + Phase2 GUI 截图 + Claude 多模态视觉裁决",
+          "detail": "新增 verify-scene skill,作为 run-scene 的前置门禁。Phase 1: seed 1..max_seeds(默认 5) headless 跑 run-scene --headless --run-time 15 --seed N,正则解析 'Adversities fired: K' 第一个 K>0 的 seed 即 PASS,wall budget ~3s/seed。Phase 2: 用 verified seed 起 --gui 并由 run_scenario.py 的 step_pipeline.hook('periodic_screenshot') 每 N 仿真秒落一张 traci.gui.screenshot 到 skills_demo_screenshots/verify/,大于 5KB 的非空截图算证据。VERDICT PASS 仅当两阶段都有证据。主会话拿到 PNG 路径后用 Read 工具多模态读图,按 cut-in / rear-end / run-red-light / jaywalker 各自的视觉规则裁决(绿 AV + 红 BV 是否在同一帧、BV 在不在 AV 邻车道等),失败就在 Phase 1 的 fires>0 seed 集里换一个 seed,最多 3 次。Exit 0/3/4/5 分别表示 PASS / Phase1 fail / Phase2 fail / exec fail。"
+        },
+        {
+          "title": "run-scene launcher 加 AV 追踪 + 周期截图 hook;cut-in 平滑化(SUMO sublane SL2015 + lcAccelLat 调参)",
+          "detail": "run_scenario.py 增加 start_pipeline.hook 在 sim 启动后调 traci.gui.trackVehicle('AV') + setZoom(800) 让 sumo-gui 自动跟随 AV;新增 --screenshot-every-secs / --screenshot-dir CLI,step_pipeline.hook 周期 libsumo.gui.screenshot(view, path, 1400, 900)。修了 Simulator.start() 重复 --start flag、--run-time int 类型与 verify-scene 传 str 的不匹配、Path('X.net.xml').stem='X.net' 让 launcher 自动命名 .rou.xml 时多剥一层 .net 后缀。Detroit Campus Martius cut-in demo 重做:用 libsumo + 自定义 vType 'SMOOTH_BV' (lcAccelLat=1.5 / lcMaxSpeedLatStanding=2),--lateral-resolution 0.5 启用 sublane SL2015 模型,把 trigger 窗从 5-15m 改到 15-30m 解决 BV 完成换道后落到 AV 后方的问题(原因是 SMOOTH_BV 继承 DEFAULT_VEHTYPE maxSpeed=14.69 比 AV 15 慢)。截图入 skills_demo_screenshots/。"
+        },
+        {
+          "title": "find-map 3 个 bug 修复 + sim-replay 从 upstream 集成 + 记忆 always-AV-with-tracking 落盘",
+          "detail": "find-map 修了 3 个 bug:(1) Nominatim 不支持 'Main and Huron' 交叉路口查询,reference 改成单街名示例 + 加 gotcha 警示;(2) intersection road-type 默认 --osm.sidewalks true 只读 OSM 已有 tag,downtown 多数没有,加 --sidewalks.guess --crossings.guess 让 netconvert 自己猜;(3) Overpass 空响应让 netconvert 报隐晦错,新增 count_osm_ways() 预检,exit 4 配可操作的错误文本。sim-replay 从 upstream/add-sim-replay-skill 分支 cherry-pick 进 add-ate-skills,接到 make-event Stage 6 作为可选回放,traci 子进程(非 libsumo)起 sumo-gui 读 heading_tracker.jsonl 用 moveToXY 重放轨迹。在 ~/.claude/.../memory/ 新增 feedback_always_av_with_tracking.md 强约束 '每个 TeraSim 仿真必须含 ego AV、对抗针对 AV、GUI 跟随 AV、AV route 必填',并在 MEMORY.md 索引登记。"
         }
       ],
       "in_progress": [
