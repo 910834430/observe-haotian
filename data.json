@@ -2,7 +2,7 @@
   "name": "Haotian",
   "role": "Simulation Engineer",
   "company": "Inchor Mobility",
-  "last_updated": "2026-06-08",
+  "last_updated": "2026-06-09",
   "days": [
     {
       "date": "2026-05-07",
@@ -1090,6 +1090,47 @@
         {
           "title": "修 av_debug_control 硬编码 bug — 把 scripts/run_experiment_cnde.py:365 改成读 yaml,让 continue_on_av_collision=false 真正在 nade_with_av.py 触发 return False",
           "detail": "当前 av_debug_control=True hardcoded 让 elif 分支永远不进 → continue=false 也仍然 continue。改成 av_debug_control=getattr(config.environment.parameters, 'av_debug_control', False)。但要注意 ann_arbor_cnde_autoware.yaml 有显式 av_debug_control: false (cosim 模式需要这个),所以 default 应该是 False, 在 ncrc_combined_adversity.yaml 加 av_debug_control: true 才能让 stop 生效。"
+        }
+      ]
+    },
+    {
+      "date": "2026-06-09",
+      "completed": [
+        {
+          "title": "CNDE Stage 2 INC-269 ≥30 attr crashes ACHIEVED — n=80 post-revert mass batch on Dylan-defense-intact baseline 给 37 crashed eps (54% per-episode rate)",
+          "detail": "完成 INC-269 deliverable mass batch。两批 n=40 (seeds 45001-45080),共 n=80 across ~170 miles。最终 37+ crashed eps (per-episode 54%),68 per-event attr / 6 unattr (signal 92%)。ΣW=1.25 全部来自 25 TrafficRule attr × 0.05 each (LeaderAdv 43 attr 但 W=1e-6 几乎不贡献)。IS rate estimate 7317 ppm vs NDE Stage 1 baseline 104 ppm — 70x over-estimate 因 IS_AV_RADIUS=100m gate 没在 weights 里 normalize (集中 sampling 在 AV 近邻 BV → 实测撞车率被放大)。doc cnde_stage2_inc269_final_20260608.md (176 行) 写完整 methodology + class breakdown + caveats + 与 NDE comparison。Wall time ~6 hours total (max_concurrent=3, per-run 13-25min 因 continue_on_av_collision=false 让 crashed eps 早终止)。"
+        },
+        {
+          "title": "CNDE adversity trigger 在 NDE vs CNDE 几何差异分析 — 相同 AV IDM、相同 SUMO BV 执行,但 trigger 时刻 BV-AV gap 分布不同 → conversion 不同",
+          "detail": "诊断为何 CNDE 撞得多 (raw 数量) 但 IS-weighted 实际可能 underestimate (因 Leader W=1e-6)。详细 trace: NDE 模式 BV 全程 SUMO IDM,equilibrium gap 5-15m,LeaderAdv trigger 时 gap 5-10m → 2 秒 ff_accel × 2.5 m/s² 能 close ~11m → 撞。CNDE 模式 BV 全程 NN naturalistic,human-trained 偏好 2+ 秒 headway → trigger 时 gap 15-30m → 2 秒 burst 不够 close → SUMO IDM 救回。dyn_bv_10 实测 trace: t=343.6 commit gap=25.4m, 2 秒 burst speed 9.2→11.7 m/s, gap close 到 13m, 然后 duration 到期, SUMO IDM 急刹 -8 m/s² 救回。所以同样 adversity 执行, CNDE conversion rate 比 NDE 低纯粹因为 BV-AV gap 几何分布不同。"
+        },
+        {
+          "title": "回顾: 之前 v6b→v13 CNDE patches 全部撤回 nde_controller.py + nnde.py 到 0a31c7d — Dylan defenses 是 CNDE driving scenes 必需的",
+          "detail": "v6b→v13 工作: AV-proximity filter (3m fallback to SUMO) + IS-Skip guards in execute_trajectory_command/all_checks_off + _IS_COMMITTED_BVS cross-module registry + traci.setSpeed clamp + handover exclusion。把 IS conversion 从 0% 拉到 28% Leader, 但本周早些时候发现 v6b 测出的 74000 ppm NN imperfection 真实部分是因为 INC-240 在 inc-240-revert-dylan-test 分支上把 Dylan defenses (vehicle_exists_static, cosim moveToXY, ghost vehicle filter) revert 掉了 → CNDE driving scenes 实际需要这些 defenses。所以今天 git checkout 0a31c7d 把 nde_controller.py + nnde.py 回到 Dylan defenses 完整状态。IS-pipeline patches (nade.py, nade_with_av.py, leader_adversity.py, yaml) 保留作为已验证 root-cause 修复。Pre-revert v13 state 在 stash@{0}。"
+        },
+        {
+          "title": "更新 Notion weekly report + observe-haotian + 记忆条 — CNDE Stage 2 INC-269 done, mass batch n=80 production results",
+          "detail": "Notion Weekly Report Jun. 8 - Jun. 14 加 Jun 8 第二段 (CNDE Stage 2 还在跑 — 实际今天 Jun 9 完成), 拆成嵌套 bullets 提高可读性。Next week 划掉 v13 production, 加 INC-269 deliverable + av_debug_control bug 修复。Notes 加两条: (1) Dylan segfault defenses 不都是 libsumo UB workaround, 大部分是 CNDE driving scenes 本身需要的; (2) continue_on_av_collision: false 未生效 — elif 逻辑 + hardcoded av_debug_control。MEMORY.md index 更新 CNDE Stage 2 INC-269 done, project_cnde_stage2_blockers.md 写完整 production setup + 7317 ppm 估算 + caveats。"
+        }
+      ],
+      "in_progress": [
+        {
+          "title": "n=80 combined batch 还有 ~12 runs 没跑完 — 已达目标 37 crashed eps 超过 30 要求",
+          "detail": "68/80 done, 37 crashed eps achieved, target ≥30 已通过。剩 12 runs 约 50 min 后完成,最终预期 ~43 crashed eps + ~80 per-event attr + IS rate ~7300 ppm。"
+        }
+      ],
+      "next_steps": [
+        {
+          "title": "做 IS rate AV-vicinity gate normalization — 解决 7317 ppm 70x 高估问题",
+          "detail": "IS_AV_RADIUS=100m gate 让 sampling 集中在 AV 近邻 BV, 但 W = ndd_prob/IS_prob 假设 uniform sampling。需要在 nade.py 加 normalization: W *= (BVs within 100m of AV) / (total BVs in network)。~30 行改动。完成后 ppm 估算应接近 100-200 ppm 量级。"
+        },
+        {
+          "title": "NDE+v13 control batch — 用 cnde.enabled=false 跑同 patches 看 apples-to-apples conversion 对比",
+          "detail": "Pure NDE 用 SUMO IDM 全程, no NN inference → wall time 5-10x faster (估 3-5 min/run vs CNDE 19 min)。max_concurrent 可拉到 8-12 (no GPU)。预期 LeaderAdv conversion 比 CNDE 高 (NDE gap 5-15m vs CNDE 15-30m), TrafficRule 也有 attr。INC-269 论文里需要这个 control 数据点。"
+        },
+        {
+          "title": "修 av_debug_control 硬编码 bug — scripts/run_experiment_cnde.py:365",
+          "detail": "av_debug_control=True 硬编码让 nade_with_av.py 的 elif 逻辑永远进 → continue_on_av_collision=false 真正生效。这次 n=80 batch 已经 lucky-cased 工作了 (短 crashed runs 出现可能是 SUMO 其他终止条件触发), 但需修正以保证 future batches 干净 per-episode 数据。"
         }
       ]
     }
