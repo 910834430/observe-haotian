@@ -1111,26 +1111,46 @@
         {
           "title": "更新 Notion weekly report + observe-haotian + 记忆条 — CNDE Stage 2 INC-269 done, mass batch n=80 production results",
           "detail": "Notion Weekly Report Jun. 8 - Jun. 14 加 Jun 8 第二段 (CNDE Stage 2 还在跑 — 实际今天 Jun 9 完成), 拆成嵌套 bullets 提高可读性。Next week 划掉 v13 production, 加 INC-269 deliverable + av_debug_control bug 修复。Notes 加两条: (1) Dylan segfault defenses 不都是 libsumo UB workaround, 大部分是 CNDE driving scenes 本身需要的; (2) continue_on_av_collision: false 未生效 — elif 逻辑 + hardcoded av_debug_control。MEMORY.md index 更新 CNDE Stage 2 INC-269 done, project_cnde_stage2_blockers.md 写完整 production setup + 7317 ppm 估算 + caveats。"
+        },
+        {
+          "title": "Cutin 复现实验三轮 (NDE n=20/20/40): 找到 cutin 0% conversion 真正根因 — 不是 safety mode 而是 target selection",
+          "detail": "用户布置: 回 TeraSim 机器 (不用 CNDE) 调 cutin 让它至少能撞一次。Stage 1 NDE baseline: 105 cutin commits / 0 attr (0%)。Tune1: p_yaml × 100 + LanechangeAdv duration 1→2.5s → 66 cutin commits (× 5× Stage 1) / 0 attr。诊断 stderr 日志: BV 的 IS-Adv-Relax `smode→31` 全程,nade.py:762 故意对 LanechangeAdv 保留默认 smode(注释说 changeLane 机制不靠 setSpeed),但 smode=31 启用 safe-gap 让 BV 切入时自动减速避撞。Tune2: 加 `elif _orig_type in (LEFT, RIGHT): setSpeedMode(22)` (drop safe-gap) + duration 2.5→5.0s → 44 cutin commits / **still 0 attr**。诊断升级: smode=22 已 drop safe-gap 还是 0 撞 → 根因不在安全模式,而在 **target selection**。当前 `lane_change_adversity.py` 的 trigger 用 `obs_dict[\"ego\"]` (BV 自己的观察) 判断'被左/右跟车挡住',**不显式检查那个跟车是不是 AV** → 多数 cutin 切到其他 BV,AV 根本不在 victim 角色。Tune3: 加 AV-targeting filter (`left_follower[0][0] == \"AV\"` / `right_follower[0][0] == \"AV\"`) — 这正是 CLAUDE.md 描述 520toRapp 5 个 adversity 用的做法,但 NCRC codepath 没加。Reboot 前 tune3 n=20 已产生 1 个 `type=\"side\"` AV crash (seed45314) — 看上去是 cutin 但 reboot 清了 /tmp 日志无法严格归因。"
+        },
+        {
+          "title": "Tune3-confirm n=40 中间数据 (CPU 全竞争 40 workers): 68 cutin commits / 仍 0 cutin attr — 2 个 AV crash 实为 TrafficRule (TLS-running)",
+          "detail": "Reboot 后重启 tune3 n=40 (seeds 45301-45340)。CPU 没 concurrency cap,40 workers 全并发跑,1/40 done @ 30 min。中间数据: 68 cutin commits (smode=22 全程确认,AV-targeting filter 工作),2 AV crashes。但拆解后发现两个 crash 都是 TrafficRuleAdversity attr (intersection_tfl,BV 闯红灯撞 AV 路口 type=\"side\")。**0 cutin attr 仍未破**。新诊断: SUMO `changeLaneRelative` 横向运动太平滑,BV 慢慢切入 AV 车道,AV 在 NCRC 慢速 (2-9 m/s) 环境下刹车距离 1-2 m 几乎肯定能避开。即使 AV-targeting 命中 + safe-gap off 也撞不了。tune4 设计已成型(等 tune3 完): 收紧 trigger 几何要求 AV 与 BV 横向并排 (gap ∈ [-BV_length, -0.5])、加 BV `setLaneChangeMode(0)` 去掉所有 SUMO LC 安全、duration 5→8s。如果 tune4 仍不行,考虑 nuclear: `moveToXY` 物理硬塞 BV 入 AV 车道。"
+        },
+        {
+          "title": "写完 mass-batch-crash-rate skill (`SKILL.md` + `aggregate.py`) — 一行命令出 IS-weighted ppm 报告",
+          "detail": "用户同时让我写一个 skill push 到 inchor-mobility/TeraSim repo,让任何用户能跑大批仿真出事故率。完成两个文件: `.claude/skills/mass-batch-crash-rate/SKILL.md` (9.4 KB,6 步流程: pre-flight → mode config → launch → wait → aggregate → interpret,4 profile 表 smoke/Stage-1-NDE/Stage-2-CNDE/cutin-tuning,5 条 caveats) 和 `aggregate.py` (10.7 KB) — parser 读 per-run `accident_summary.json` + `collision.xml` + 各 run stderr (IS-commit + IS-Adv-Relax 事件),按 3-sec pair-dedup 合并 overlap-continuation,8-sec attribution window 归因,输出 Markdown 报告 (per-class commits/attr/conv/W_class/ΣW + per-episode crashed-eps + ppm + caveats)。WEIGHT_MAP 写死: TrafficRule W=0.05, Lanechange W=6.4e-4, Leader/Follower W=1.04e-6。今天三轮 tune 都用它做聚合,工具 work。Skill 已就位 worktree + 主仓 mirror,**未自动 commit** (per memory `feedback_no_auto_commit.md`),等用户审。建议 commit 流: branch from `add-ate-skills` (relaxed `.gitignore`) → `git add -f .claude/skills/mass-batch-crash-rate/{SKILL.md,aggregate.py}` → PR。"
+        },
+        {
+          "title": "发现 worktree 陷阱二次复现: editable install 指向主仓,worktree 的 patch 不生效 → 第一次 tune2 跑错代码",
+          "detail": "Tune2 启 batch 后中间窥探发现 smode 还是 31 (应该是 22)。grep `import inspect.getsourcefile` 输出 `/home/haotian/Projects/Isuzu_cosim/TeraSim/packages/...` — editable install 指向**主仓**,我之前的 Edit 改在 `.claude/worktrees/cnde-prox-v5/packages/...` 都没生效。这正是 memory 里 `[[terasim-worktree-pitfall]]` 说的陷阱第二次踩。处理: 终止失败 batch,删除 invalid output 目录,cp 已 patch 的 worktree `.py` 文件覆盖主仓 (`.py` 不是 `.so`,没有 mmap 风险),重新 launch tune2 (seeds 45201-45220),验证日志 `smode→22` 后才放心。教训写进 memory 强化: 任何 TeraSim 编辑必须确认是主仓还是 worktree 的 editable 路径。"
         }
       ],
       "in_progress": [
         {
-          "title": "n=80 combined batch 还有 ~12 runs 没跑完 — 已达目标 37 crashed eps 超过 30 要求",
-          "detail": "68/80 done, 37 crashed eps achieved, target ≥30 已通过。剩 12 runs 约 50 min 后完成,最终预期 ~43 crashed eps + ~80 per-event attr + IS rate ~7300 ppm。"
+          "title": "Tune3-confirm n=40 NDE batch 跑动中 (1/40 done @ 30 min, 40 workers 全竞争 CPU)",
+          "detail": "等 batch 完成后做完整 aggregate + 若仍 0 cutin attr 启动 tune4 (tight geometry + lcMode=0 + duration=8s)"
         }
       ],
       "next_steps": [
         {
-          "title": "做 IS rate AV-vicinity gate normalization — 解决 7317 ppm 70x 高估问题",
-          "detail": "IS_AV_RADIUS=100m gate 让 sampling 集中在 AV 近邻 BV, 但 W = ndd_prob/IS_prob 假设 uniform sampling。需要在 nade.py 加 normalization: W *= (BVs within 100m of AV) / (total BVs in network)。~30 行改动。完成后 ppm 估算应接近 100-200 ppm 量级。"
+          "title": "Tune4: 收紧 LanechangeAdv 几何 + 加 `setLaneChangeMode(0)` 去 SUMO LC 安全 + duration 5→8s",
+          "detail": "tune3 证明 AV-targeting filter 不够 — SUMO 平滑横向移动让 AV 总能刹住。tune4 须强制 BV 与 AV **横向并排**几何 (gap ∈ [-veh_len, -0.5]) 才发命令,且让 BV 在 LC 期间无视所有 SUMO LC 安全。如果还不行考虑 `moveToXY` 硬塞 BV 入 AV 车道。"
         },
         {
-          "title": "NDE+v13 control batch — 用 cnde.enabled=false 跑同 patches 看 apples-to-apples conversion 对比",
-          "detail": "Pure NDE 用 SUMO IDM 全程, no NN inference → wall time 5-10x faster (估 3-5 min/run vs CNDE 19 min)。max_concurrent 可拉到 8-12 (no GPU)。预期 LeaderAdv conversion 比 CNDE 高 (NDE gap 5-15m vs CNDE 15-30m), TrafficRule 也有 attr。INC-269 论文里需要这个 control 数据点。"
+          "title": "Mass-batch-crash-rate skill commit + push 到 inchor-mobility (用户审后)",
+          "detail": "建议 branch from `add-ate-skills` (relaxed `.gitignore`) 避免 cnde-yilin 的 `.claude` ignore。已准备好 git add -f 命令 + PR 模板。"
         },
         {
-          "title": "修 av_debug_control 硬编码 bug — scripts/run_experiment_cnde.py:365",
-          "detail": "av_debug_control=True 硬编码让 nade_with_av.py 的 elif 逻辑永远进 → continue_on_av_collision=false 真正生效。这次 n=80 batch 已经 lucky-cased 工作了 (短 crashed runs 出现可能是 SUMO 其他终止条件触发), 但需修正以保证 future batches 干净 per-episode 数据。"
+          "title": "IS rate 的 AV-vicinity gate 归一化 (~30 行 nade.py,`W *= n_eligible/n_total`)",
+          "detail": "下周优先级,让 CNDE Stage 2 的 6609 ppm 可与 NDE Stage 1 的 104 ppm 直接比较。当前 64× 高估全部来自 `IS_AV_RADIUS=100m` gate 没归一化在 weight 公式里。"
+        },
+        {
+          "title": "修 `scripts/run_experiment_cnde.py:365` 的 `av_debug_control=True` 硬编码",
+          "detail": "下周优先级。当前硬编码 True 让 `continue_on_av_collision: false` 在 cosim 模式不生效。让它跟 YAML 走或加 CLI flag。"
         }
       ]
     }
