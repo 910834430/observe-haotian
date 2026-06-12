@@ -2,7 +2,7 @@
   "name": "Haotian",
   "role": "Simulation Engineer",
   "company": "Inchor Mobility",
-  "last_updated": "2026-06-09",
+  "last_updated": "2026-06-12",
   "days": [
     {
       "date": "2026-05-07",
@@ -1127,6 +1127,26 @@
         {
           "title": "发现 worktree 陷阱二次复现: editable install 指向主仓,worktree 的 patch 不生效 → 第一次 tune2 跑错代码",
           "detail": "Tune2 启 batch 后中间窥探发现 smode 还是 31 (应该是 22)。grep `import inspect.getsourcefile` 输出 `/home/haotian/Projects/Isuzu_cosim/TeraSim/packages/...` — editable install 指向**主仓**,我之前的 Edit 改在 `.claude/worktrees/cnde-prox-v5/packages/...` 都没生效。这正是 memory 里 `[[terasim-worktree-pitfall]]` 说的陷阱第二次踩。处理: 终止失败 batch,删除 invalid output 目录,cp 已 patch 的 worktree `.py` 文件覆盖主仓 (`.py` 不是 `.so`,没有 mmap 风险),重新 launch tune2 (seeds 45201-45220),验证日志 `smode→22` 后才放心。教训写进 memory 强化: 任何 TeraSim 编辑必须确认是主仓还是 worktree 的 editable 路径。"
+        },
+        {
+          "title": "新建 Multica issue INC-281 「设计 Autoware × TeraSim 联合仿真大规模自动化批量执行 Pipeline」并启动调研 — 目标是替掉 cosim 中每次手动点 RViz 的环节,跑大批量事故率参数 sweep",
+          "detail": "需求来源: 测事故率参数 (e.g. per-class adversity probability、不同 scene、不同 seed) 需要批量跑 Autoware + TeraSim cosim,但当前每次都要在 RViz 手动点 2D Pose Estimate / 2D Goal Pose / Auto 三次,完全无法 scale。INC-281 创建于 Inchor workspace 的 ISUZU Project,顶层 task。调研范围: 现有手动流程拆解 → RViz 按钮的 ROS 等价接口 → tick driver 终止语义 → 已有批量基础设施 → 落地方案设计。"
+        },
+        {
+          "title": "调研发现 mcity_route_sim 节点已 100% 替代 RViz 三个手动按钮 (autoware/src/mcity/mcity_route/mcity_route/mcity_route_sim.py)",
+          "detail": "代码细读: 节点订阅 /autoware/state 走状态机, INITIALIZING 时 publish PoseWithCovarianceStamped 到 /initialpose (= 2D Pose Estimate), WAITING_FOR_ROUTE 时 call /planning/mission_planning/set_route_points (= 2D Goal Pose + 可指定 waypoints), WAITING_FOR_ENGAGE 时 call /system/operation_mode/change_autoware_control + change_operation_mode (mode=AUTONOMOUS) (= Auto/Engage 按钮)。已注册为 console_script `ros2 run mcity_route mcity_route_sim`。但 waypoints 是 NCRC 13 个点硬编码 — 520toRapp 用不了直接复制,需要参数化或新建一个 520toRapp 版本。tick_driver (autoware_cosim_http/terasim_tick_driver.py:89-105) 在 /simulation_status returns 'finished' 时 raise KeyboardInterrupt 干净退出 ROS executor — T2 自终止能力已就位,orchestrator 只需 SIGINT T3 (planning_simulator) + T4 (mcity_route_sim)。"
+        },
+        {
+          "title": "为 520toRapp 计算 UTM offset + 起终点 Autoware-frame 坐标 — Autoware 默认 ann_arbor_full 的 (-11300.25, -11288.60) 在 520toRapp 上完全错位",
+          "detail": "公式取自 scripts/autoware_cosim.py:13-61 compute_utm_offset(): utm_offset = SUMO_utm_origin - Autoware_map_origin_utm。520toRapp SUMO netOffset=(-276408.30, -4685273.31) 取反得 SUMO UTM (276408.30, 4685273.31); Autoware map_projector_info (lat 42.30523, lon -83.70758, UTM zone 17) → (276831.4474, 4687217.0578); 相减得 **utm_offset = (-423.1474, -1943.7478)**。用项目函数二次验证一致。同时算了 520toRapp_construction route (24 边) 的起终点 Autoware-frame 位姿: 初始 (234.09, -871.34) qz=-0.2018 qw=0.9794, 目标 (236.01, -866.96) qz=0.9791 qw=0.2032 — 用于后面给 520toRapp 版 mcity_route 节点替换 NCRC 硬编码。CLI: `--map-path ~/Projects/Isuzu_cosim/autoware/map/520toRapp --utm-offset -423.1474 -1943.7478`。"
+        },
+        {
+          "title": "设计 Pipeline 两阶段方案 — Phase 1 sequential orchestrator (写 run_batch_autoware.py 仿 run_parallel_cnde_test.py 结构), Phase 2 通过 ROS_DOMAIN_ID + per-run port 做并行扩展",
+          "detail": "Phase 1 (先做这个) Python 单进程顺序循环: per-run YAML patch (seed + nth + 可选 probability 覆盖) → start service + experiment + planning_simulator + mcity_route → wait experiment 自然退出 → SIGINT T3/T4 → ros2 daemon stop 防 DDS 残留 → 解析 output/<scenario>/raw_data/<nth>/accident_summary.json 写聚合 CSV。三种 mcity_route 落地选项 (A shell 临时 ros2 topic/service 验证一次; B 复制 mcity_route_sim.py → mcity_route_520torapp.py 改坐标; C 把节点改成读 yaml 参数化最一劳永逸) — 推荐先 A 验证链路, 再 B 落地 batch, 长期 C。Phase 2 (扩展) 用 ROS_DOMAIN_ID 隔离每次跑的 DDS, base_url 已经是 autoware_cosim_http 的入参可参数化。其他要核的开放问题列表: planning_simulator.launch.xml 是否支持 rviz:=false (决定是否要 Xvfb), 撞车后是否能提前终止 (省 batch 时间), ROS daemon 残留清理。详细方案已写给用户审。"
+        },
+        {
+          "title": "Cosim 实时诊断 — /perception/object_recognition/objects 8.5Hz 但全是空对象数组, 11 辆 BV 在 AV 150m 内但都没传给 Autoware (vehicle_plugin BV→ROS 链路有 bug, 待深查)",
+          "detail": "用户感觉 Autoware 收不到 SUMO 更新,实地查验。ROS 端: /autoware/state=5 (DRIVING), operation_mode=AUTONOMOUS, /clock 60Hz, /localization/kinematic_state 40Hz (AV 自己的姿态 SUMO→Autoware 正常),AV @ Autoware (260.99, -296.89) — 这些 OK。坏的: /perception/object_recognition/objects 8.5Hz publishing **空 objects 数组**。HTTP service /simulation/.../state 验证 SUMO 端: sim_t=173.3, agent_count.vehicle=12, AV @ SUMO (681.30, 1701.19), 11 个 lane0_right_turn_traffic.* BV 距离 AV 83.5-146.4m 全部 ≤ perception_range=150。vehicle_plugin ROS params 全对 (utm_offset_x=-423.1474, utm_offset_y=-1943.7478, perception_range=150.0, control_cav=true, simulation_id 对得上)。SUMO 数据有、ROS topic 在出、但 message 是空 — 嫌疑: (a) vehicle_plugin 的 BV→ROS_msg 转换逻辑漏 BV; (b) lane0_right_turn_traffic vType 被 plugin 过滤掉; (c) 转换中数值算错让 BV 落到 visible 区域外。下次接着查 autoware_vehicle_plugin.py 的 BV publish 路径。"
         }
       ],
       "in_progress": [
@@ -1151,6 +1171,96 @@
         {
           "title": "修 `scripts/run_experiment_cnde.py:365` 的 `av_debug_control=True` 硬编码",
           "detail": "下周优先级。当前硬编码 True 让 `continue_on_av_collision: false` 在 cosim 模式不生效。让它跟 YAML 走或加 CLI flag。"
+        }
+      ]
+    },
+    {
+      "date": "2026-06-10",
+      "completed": [
+        {
+          "title": "INC-281 范围收紧 — 先单独测 Autoware 自动化(去掉 SUMO/cosim 大依赖),目标: launch → init pose → goal → engage → drive → close → 循环重启,全程无人工 RViz 点击,截图证明 AV 自己开起来",
+          "detail": "原计划要测完整 cosim (T1 service + T2 terasim experiment + T3 autoware launch + T4 mcity_route 自动按按钮),变量太多 debug 困难。决定**分层验证**: 先剥离 SUMO 端,只测 Autoware T3 + 自动化按按钮这套链路。这样如果跑通,接下来加 cosim 只是叠加 SUMO 端即可。Deliverable: 一个 bash 脚本 `aw_loop_test.sh`,自动化跑 N 轮 (launch / set initial pose / set route / engage / drive 25s / SIGINT teardown),每个关键节点截图。两轮 = 验证关 + 再开 + 再次自动 engage 也能跑。"
+        },
+        {
+          "title": "第一版 aw_loop_test.sh 用 SUMO net + UTM offset 算 init/goal 坐标 — 2 轮都在 set_route_points 卡死,返回 'The planned route is empty.'",
+          "detail": "脚本架构: 后台 launch Autoware → 轮询 `/autoware/state` 等到 state=1 (INITIALIZING) → `ros2 topic pub /initialpose ...` → 等 state=2 (WAITING_FOR_ROUTE) → `ros2 service call /planning/mission_planning/set_route_points ...` → 等 state=4 (WAITING_FOR_ENGAGE) → `ros2 service call /system/operation_mode/change_autoware_control` + `change_operation_mode (mode=AUTONOMOUS)` → 等 state=5 (DRIVING) → 三张行驶截图 (+5s/+15s/+25s) → SIGINT $LAUNCH_PID → 下一轮。截图用 `import -window root` on DISPLAY=:1 (Xorg) + XAUTHORITY=/run/user/1001/gdm/Xauthority。坐标用 SUMO net 519toRapp.net.xml + utm_offset (-423.1474, -1943.7478) 推: INIT 边 9248308181#0 中点 (238.96, -873.34) yaw=-23°, GOAL 边 87264071#0 中点 (638.50, -838.63) yaw=+16°。两轮全在 set_route_points 返回 'The planned route is empty.' code=3,state 卡在 2 永远到不了 5。"
+        },
+        {
+          "title": "诊断: Autoware mission_planner 真实拒绝理由 'Goal's footprint exceeds lane!' — SUMO 边几何与 lanelet 拓扑有 cm 级偏差 + 朝向超出 lanelet 容差",
+          "detail": "扒 `/tmp/aw_round1.log` 里 component_container-23 mission_planner 的实际 WARN: `[WARN] Goal's footprint exceeds lane!` `[WARN] Goal is not valid! Please check position and angle of goal_pose` → 紧接着 `status code 3 'The planned route is empty.'`。Autoware 把车辆 footprint (vehicle_info.param.yaml 里的 length/width = 5m/1.85m) 按 goal_pose 的 yaw 旋转后,bounding box 至少有一个角越过最近 lanelet 的边界 → 拒。根因: SUMO net 的 edge centerline (用 `sumolib` 读 net.xml + utm_offset 平移) 跟 lanelet2 OSM 的 lane centerline 有 cm-m 级 systematic 偏移 (两套数据来源不同,520toRapp.net.xml 来自 OSM/手工合成,520toRapp_lanelet2.osm 是 commonroad-scenario-designer 生成);加上 yaw 用 SUMO 边端点 atan2 算的是 chord 方向,不是切线方向,对弯道误差更大。"
+        },
+        {
+          "title": "修复: 直接从 lanelet2 OSM 提取车道边界 way (78947+78948 中线) 取 30%/70% 位置点 + 切线 yaw → 2 轮闭环成功,14 张截图存证",
+          "detail": "解法: 写 Python 解析 `520toRapp_lanelet2.osm` (20MB, 93669 nodes) → 用 pyproj UTM zone 17 把所有 node 投到 local frame (减去 Autoware map_origin UTM = (276831.4474, 4687217.0578)) → 找最长的 `type=line_thin` 车道边界 ways → 配对 sibling ways 78947+78948 (各 2348 节点, len ~1175m, 同向),取它们的中线 = 车道 centerline → 在 cumulative arc 30%/70% 位置取点 + 邻接节点切线作 yaw。结果: INIT (573.69, -863.37) yaw=24.1° qz=0.2086 qw=0.9780, GOAL (1012.89, -881.58) yaw=-93.2° qz=-0.7263 qw=0.6874, distance ~440m (弯道)。重跑 aw_loop_test.sh n=2: **Round 1 + Round 2 都完整走完 state 1→2→4→5 DRIVING 状态机,zero 手动点击**。Round 1 04_engaged 截图显示 OperationMode=AUTONOMOUS / Routing=SET / Motion=MOVING / Gear=DRIVE / AutowareControl=Enable 全绿,3D view 绿色规划走廊延伸出去;Round 1 07_drive_25s 显示走廊几何变化(车确实沿规划走了)。Round 2 同样从 launch 开始独立全自动跑到 DRIVING,证明 close→reopen→re-engage 循环可行。14 张截图存 `~/.claude/jobs/678a91cc/tmp/aw_loop_shots/`。"
+        },
+        {
+          "title": "Autoware install 完整性体检 + 修一处实际损坏: sample_vehicle_description / sample_sensor_kit_description 的 install/share/{mesh,urdf,config} 符号链接被清,colcon rebuild 1.3 秒恢复",
+          "detail": "全扫 `~/Projects/Isuzu_cosim/autoware/install/` (320 个子包) vs `src/` 比对: 发现两个 description 包 install 端只剩 colcon hook 脚手架,实际的 `urdf/vehicle.xacro`、`mesh/lexus.dae`、`mesh/lexus.jpg`、`config/{simulator_model,vehicle_info,mirror}.param.yaml` 全部消失 — 但 src 完好。CMakeLists.txt 里 `ament_auto_package(INSTALL_TO_SHARE mesh urdf config)` 规则正确,说明原 build 是好的,**install 端的符号链接 (--symlink-install 生成的) 中间某次被清掉了**(推测 apt autoremove 触发 dpkg trigger 误伤,或某次手动 `find install -type l -delete` 之类清理)。修复: `colcon build --packages-select sample_vehicle_description sample_sensor_kit_description` 重新生成符号链接,1.3s 完成。其他 ROS 体系健康: ros-humble-desktop / rmw-cyclonedds-cpp 1.3.4 / cyclonedds 0.10.5 / rmw-implementation 2.8.5 全装着,apt autoremove 候选为空,自定义 cosim 包 (autoware_cosim / autoware_cosim_http / mcity_route / autoware_adapi_v1_msgs / tier4_system_msgs) 全部 built,setup.bash 在,enp4s0 multicast UP,topic 实际 60Hz/40Hz 流通。"
+        }
+      ],
+      "in_progress": [
+        {
+          "title": "Phase 1 sequential orchestrator — 把 aw_loop_test.sh 的循环骨架往外套一层 SUMO/cosim,变成完整的批量 cosim 自动化",
+          "detail": "已验证: Autoware 自动化闭环本身可跑 (aw_loop_test.sh)。下一步: 把 T1 (run_service.py 长驻) + T2 (run_experiment_cnde.py --autoware --utm-offset -423.1474 -1943.7478) 接进每轮,T4 仍是自动按按钮 (现在已知调三个 ros2 topic/service)。然后接 YAML/scene 参数 sweep loop + 输出聚合到 CSV。坐标方面: 把 mcity_route_sim.py 的 NCRC 硬编码 waypoints 改成从 520toRapp_lanelet2.osm 提取的车道中线点 (借鉴今天的 Python 解析方法)。"
+        }
+      ],
+      "next_steps": [
+        {
+          "title": "深查 cosim vehicle_plugin 为何把 SUMO 11 辆 BV (距 AV 83-146m,全在 perception_range=150 内) 转成 /perception/object_recognition/objects 空消息",
+          "detail": "昨天 (06-09) 实地查证 cosim 跑动时 SUMO 端有 12 辆车,11 辆 lane0_right_turn_traffic.* 在 AV 150m 内,但 /perception/object_recognition/objects 8.5Hz publishing 全是空 objects 数组。vehicle_plugin params (utm_offset_x/y, perception_range, control_cav, simulation_id) 全验证正确。嫌疑: autoware_vehicle_plugin.py 的 BV→ROS_msg 转换逻辑漏 BV,或 lane0_right_turn_traffic vType 被 plugin 过滤。优先级: Phase 1 orchestrator 跑通后但开始 batch 之前必须修这个,否则 Autoware 完全 'blind' 看不到 SUMO 的对抗车,事故率数据无意义。"
+        },
+        {
+          "title": "把 `import -window root` 截图工具换成只截 RViz 窗口 (xdotool search --name RViz | head -1 → import -window $WID),减少截图 size 并避免捕到旁边的 IDE/终端",
+          "detail": "目前 aw_loop_test.sh 截全屏 (3440x1440, 1.4MB/张, 14 张共 19MB),信息密度低且暴露其他窗口内容。改成 `WID=$(xdotool search --name 'RViz' | head -1); import -window $WID file.png` 只截 RViz panel + 3D view,会更清晰也更小。"
+        },
+        {
+          "title": "把 aw_loop_test.sh 抽离成 Phase 1 orchestrator 的子模块 — autoware_session.sh: launch / wait_state / set_init / set_goal / engage / teardown 函数",
+          "detail": "当前 aw_loop_test.sh 单文件 ~80 行,函数 (screenshot, get_state, wait_for_state) 已经清晰。下一步把它拆成可被外层 orchestrator 调用的库 (source autoware_session.sh; aw_launch; aw_set_init X Y QZ QW; aw_set_goal X Y QZ QW; aw_engage; aw_wait_drive; aw_teardown)。这样 Pipeline Phase 1 的 outer loop (over scenarios × probabilities × seeds) 可以干净地 compose 这套原语 + cosim 原语。"
+        }
+      ]
+    },
+    {
+      "date": "2026-06-12",
+      "completed": [
+        {
+          "title": "OpenOasis demo SaaS 端到端 HF Space 部署跑通 — 4/4 job ready (3×highway_merge + 1×intersection_tfl),map.net.xml 1.19 MB + fcd_all.xml 9–12 MB 均可下载,达成验收目标'用户选 2 点 → Map + FCD 稳定输出'",
+          "detail": "从早上开始 HF 第 4 次 build 起线后,e2e 测试连续暴 4 个部署 bug 逐一修。(a) `libGL.so.1: cannot open shared object file` — 我加的 trajectory.png 端点引入 matplotlib/contextily/rasterio,Dockerfile 没装 `libgl1 libglib2.0-0`,补包。(b) 进度 70% 死在 `/home/haotian/miniconda3/envs/terasim/bin/python: No such file or directory` — `sumo_runner.py` 把本地 conda 路径硬编码到了默认值,改成 `SUMO_HOME` 从 `sumolib.__file__` 派生、`PYTHON_BIN` 默认 `sys.executable`、`CONDA_BIN` 用 `shutil.which('netconvert')`,Dockerfile 显式设两个 ENV 兜底。(c) 70% 又死在 `terasim/.claude/skills/run-scene/scripts/run_scenario.py: No such file or directory` — 根 .gitignore 里 `.claude/` 把 terasim 子树的 .claude 也排除了,改成 `/.claude/` + `!terasim/.claude/**` 显式放行,28 个 skill 文件入库。Build 第 7 次起线,e2e 一次过。立刻在 HF stub (commit 18cf996) + GitHub `feat/terasim-pipeline-v2` (commit 3d39da65) 双仓打 `ground-truth-stable-v1` tag,作回滚锚点。后续连跑 3+1 job 验证稳定性(4/4 ready,Map 字节级一致 deterministic,FCD 9–12 MB 因 seed 随机略差异)。"
+        },
+        {
+          "title": "noVNC + sumo-gui in HF container 实验(A 路径)— HF 反滥用 90 秒内 `Flagged as abusive` PAUSED 整个 Space,确认 VNC/桌面共享在 HF Spaces 根本不可行",
+          "detail": "用户要求'用真实容器把 sumo-gui 跑出来',我按 noVNC stack 实现:Dockerfile 加 `xvfb x11vnc fluxbox novnc python3-websockify supervisor nginx-light dbus-x11 xauth`,写 supervisord.conf 编排 6 个进程 (Xvfb:0 + fluxbox + x11vnc:5900 + websockify:6080 + uvicorn:8000 + nginx:7860),nginx 反代 `/ → uvicorn`、`/gui/ + /websockify → noVNC`。push 触发 build #8,2 分钟内 build 还在跑就被 HF 自动 PAUSED,runtime API 返回 `errorMessage='Flagged as abusive'`。HF Spaces 反滥用 scanner 检测 Xvfb/x11vnc/远程桌面组件视作平台滥用 — Spaces 政策定位 ML demo,不允许 desktop sharing。立即 force-push HF main 回 `ground-truth-stable-v1` 干净版本,但 PAUSED 状态下 push 不自动 unpause,旧 Space 卡死等用户手动 dashboard Restart 或申诉。教训写入 memory `feedback_no_novnc_on_hf.md`,后续 HF 部署绝不再碰 VNC stack。"
+        },
+        {
+          "title": "10 分钟创建备用 Space `openoasis-demo-v2` 并端到端验证通过 — 同账号下新建 Space + 推 ground-truth-stable-v1 + 4 min build 直接 RUNNING,e2e 一次过",
+          "detail": "旧 Space `inchorHaotian/openoasis-demo` 被 PAUSED 后,与其等 HF 申诉(1–2 工作日),走更快路径:用 HF API `POST /api/repos/create` 在同账号下创建 `openoasis-demo-v2`(账号没被 flag,只是单个 Space 被 flag),clone 空 repo → rsync `/tmp/openoasis-demo` HEAD(已在 ground-truth-stable-v1)→ 首次 commit + push。HF 后台自动 build 4 分 30 秒(BUILDING → APP_STARTING → RUNNING),e2e 测试 highway_merge job `c0326007`:t=5s running 15%、t=30s 70%、t=40s ready 100%,Map + FCD 都 HTTP 200 下载验证通过。新 URL `https://inchorhaotian-openoasis-demo-v2.hf.space/`,功能与 v1 一致。提醒用户不要走删账号这条路 — 违反 HF ToS 且按 IP/device fingerprint 关联识别会触发永久 ban。"
+        },
+        {
+          "title": "本地 FCD replay 工具完成 — traci 启动 sumo-gui 子进程 + 每 tick moveToXY 喂 FCD 坐标,挑 passenger-allowed edge 当 stub route 解决 vehicle add 报错,默认 auto-track AV",
+          "detail": "SUMO 本身没原生 'load FCD into sumo-gui' 命令(FCD 是输出格式不是输入),业界标准做法是 traci 驱动。脚本 `/home/haotian/.claude/jobs/c29027a2/tmp/replay_fcd.py` 用 ElementTree iterparse 流式读 FCD(避免一次性吃 9 MB),`traci.start([sumo-gui, -n, net])` + `traci.route.add(stub_edge)` + `traci.vehicle.add(vid, route, departLane='allowed')` + `moveToXY(x,y,angle, keepRoute=2)` 每 tick 推位置。第一次报错 `Vehicle 'vehicle0' is not allowed to depart on any lane of edge '-102234899'` — stub edge 是 motorway-only 不让 passenger,修脚本扫所有 edges 找一条 `lane.getAllowed` 含 passenger 的当 stub,失败 3 次 retry 降级。配合 `--delay-ms 200/400` 按用户要求放慢,自动 trackVehicle('AV') + setZoom 800。明确告知用户 bg session 没 DISPLAY 跑不了 GUI,需在他自己 terminal 或 `!` 前缀里执行。"
+        },
+        {
+          "title": "提速瓶颈分析 + 7 路提速方案 — 给出短任务 30s→10s、长任务 200s→60s 的落地路径,推荐 #5+#3+#1 零基建组合",
+          "detail": "基于今天 4 个 e2e job 的进度时间戳精确测算阶段分布(BEFC 1.23 km 单 scene):冷启 + worker 0→15% ≈5s、Stage 1+2 地图 15→30% ≈10–15s、Stage 3 仿真 30→70% ≈10s、收尾 70→100% ≈5–10s,合计 30–40s。主瓶颈 = **Overpass API 网络 IO**(地图阶段 80% 时间,WebWizard 命中率仅 42%,fallback OSMnx 还要 5s rate-limit sleep)+ **scene 串行**(MapSearcher 每 2km 切 scene,长任务线性膨胀)。给出 7 个方案表格:#1 OSM 磁盘缓存按 bbox 哈希、#2 多 scene thread pool 并发、#3 跳过 WebWizard 直 OSMnx、#4 流水线化 stage 1+2 / stage 3 重叠、#5 缩 sim time 300→90s、#6 sessionData 哈希结果缓存、#7 HF cpu-upgrade tier。推荐短期最稳组合 #5+#3+#1(1.5 天落地,零基建,不撞 Overpass 2-slot 配额),长任务收益最大方案 #2 等缓存命中率拉上来再上更稳。"
+        }
+      ],
+      "in_progress": [
+        {
+          "title": "旧 Space `inchorHaotian/openoasis-demo` 申诉解封 — 待用户手动到 HF dashboard Restart 或 Contact us,trace ID `Root=1-6a2c6e67-60b903410e2af740725227c3` 已留供 HF support 查日志",
+          "detail": "旧 Space 还在 `stage=PAUSED` + `errorMessage='Flagged as abusive'`,HF API 调不动 unpause,只能从 web dashboard `https://huggingface.co/spaces/inchorHaotian/openoasis-demo/settings` 走人工。Restart 按钮可能直接放行(因为 main 已 force-push 回 ground-truth 18cf996 干净版本,自动 build 4–5 min 就回来),也可能要走 Appeal/Contact support 通道写说明:'误判,已 revert,只是 SUMO 流量仿真 demo,trace ID 附上'。HF 一般 1–2 工作日处理。期间 `openoasis-demo-v2` 顶替使用,功能等价。"
+        }
+      ],
+      "next_steps": [
+        {
+          "title": "落地提速 #5+#3+#1 组合 — 1.5 天内把短任务 30s→10s、长任务 200s→60s,从'demo 慢得发指'变成'可演示'",
+          "detail": "(a) #5 缩 sim time:`sumo_runner.py` 的 `DEFAULT_RUN_TIME_S = 300` 改 90,5 分钟改一行,90s sim 已够 AV 走完单 scene 路径,节省每 scene 5–8s;(b) #3 跳 WebWizard:`map_searcher.py` 注释掉 WebWizard 调用链直接走 OSMnx,WebWizard 42% 命中率拖累 P99 60s+,几小时改完;(c) #1 OSM 磁盘缓存:bbox 取整到 0.001° tile 哈希成 key,存 `/data/osm-cache/<hash>.osm`(HF 持久 50GB 卷),命中跳过 Overpass,同区域重复点几乎瞬时,1 天写完。三个改动正交不冲突,push 一次到 v2 Space 4 min build 即可验证。"
+        },
+        {
+          "title": "B 路径:浏览器内 SUMO 可视化(deck.gl/mapbox-gl 渲染 net.xml + FCD)— 绕开 HF VNC 禁令,作长期方案",
+          "detail": "今天 A 路径被 HF 锁死后,B 路径(自建 web viewer)是唯一能在 HF 上展示动态轨迹的路。技术栈:前端解析 SUMO 的 net.xml 拿到 edge/lane 几何,用 mapbox-gl 渲染道路 polygon 层;FCD XML stream-parse 成 timeline,deck.gl 的 IconLayer 或 PathLayer 按 t 时间戳插值车辆 (x,y,angle);AV 高亮 + 跟随相机。比 sumo-gui 桌面在浏览器原生渲染(GPU 加速)更快,且天然多用户隔离(每 user 自己浏览器 session)。预估 3–5 天落地,可以分两阶段:阶段 1 静态轨迹 overlay 在卫星图(已有 trajectory.png 同思路),阶段 2 加播放控制条 + 实时更新。"
+        },
+        {
+          "title": "WebWizard 命中率低真实原因深挖 — 当前归因 Overpass 504/429/406,但 42% 命中率明显偏低,可能还有别的失败模式",
+          "detail": "之前粗略分析 12 次 504 + 9 次 429 中等 polyline 测试集,实际原因仅覆盖一半失败。计划:(a) 在 `map_searcher.py` 给 WebWizard 调用加细粒度 timing + exception type 记录,跑 50 次不同 bbox 收集失败分布;(b) 看是否 element-limit、bbox-size、osm-script timeout 不匹配是真正主因;(c) 决定 #3 'WebWizard 完全去掉' 还是 '调参数挽救'。这会影响提速方案 #3 的具体实现路径。"
         }
       ]
     }
